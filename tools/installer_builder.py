@@ -26,6 +26,7 @@ KNOWN_NPM = (
     Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "nodejs/npm.cmd",
 )
 KNOWN_ISCC = (
+    Path(os.environ.get("LOCALAPPDATA", "")) / "Programs/Inno Setup 6/ISCC.exe",
     Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Inno Setup 6/ISCC.exe",
     Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Inno Setup 6/ISCC.exe",
 )
@@ -69,12 +70,48 @@ def _find_executable(names: tuple[str, ...], known: tuple[Path, ...] = ()) -> st
     return None
 
 
+def _find_inno_registry() -> str | None:
+    if os.name != "nt":
+        return None
+    try:
+        import winreg
+    except ImportError:
+        return None
+
+    roots = [
+        (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (winreg.HKEY_LOCAL_MACHINE, r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+    ]
+    for hive, root_path in roots:
+        try:
+            with winreg.OpenKey(hive, root_path) as root:
+                count = winreg.QueryInfoKey(root)[0]
+                for index in range(count):
+                    try:
+                        name = winreg.EnumKey(root, index)
+                        with winreg.OpenKey(root, name) as item:
+                            display, _ = winreg.QueryValueEx(item, "DisplayName")
+                            if not str(display).lower().startswith("inno setup"):
+                                continue
+                            location, _ = winreg.QueryValueEx(item, "InstallLocation")
+                            candidate = Path(str(location)) / "ISCC.exe"
+                            if candidate.exists():
+                                return str(candidate)
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return None
+
+
 def detect_tools() -> dict[str, str | None]:
+    iscc = _find_executable(("ISCC.exe",), KNOWN_ISCC) or _find_inno_registry()
     return {
         "powershell": _find_executable(("pwsh.exe", "powershell.exe")),
         "python": _find_executable(("python.exe", "py.exe"), KNOWN_PYTHON),
         "npm": _find_executable(("npm.cmd", "npm.exe"), KNOWN_NPM),
-        "iscc": _find_executable(("ISCC.exe",), KNOWN_ISCC),
+        "iscc": iscc,
         "winget": _find_executable(("winget.exe",)),
     }
 
@@ -177,13 +214,15 @@ class BuilderApp:
     def _install_package(self, winget: str, package: str, label: str) -> None:
         self._append(f"Instalando {label} con WinGet…")
         command = [winget, "install", "--id", package, "--exact", "--silent", "--accept-package-agreements", "--accept-source-agreements"]
-        result = subprocess.run(command, text=True, capture_output=True, check=False)
+        if package == "JRSoftware.InnoSetup":
+            command.extend(["--scope", "user"])
+        result = subprocess.run(command, text=True, capture_output=True, encoding="utf-8", errors="replace", check=False)
         if result.stdout:
             self._append(result.stdout)
         if result.stderr:
             self._append(result.stderr)
         if result.returncode != 0:
-            raise RuntimeError(f"WinGet no pudo instalar {label} (código {result.returncode}).")
+            self._append(f"WinGet terminó con código {result.returncode}; se volverá a comprobar si {label} quedó instalado.")
 
     def _ensure_tools(self) -> dict[str, str | None]:
         tools = self._refresh_tools()
@@ -236,6 +275,7 @@ class BuilderApp:
 
             env = os.environ.copy()
             env["PATH"] = augmented_path(tools)
+            env["PYTHONUTF8"] = "1"
             self._append("=== Generando BarcoController-Setup.exe ===")
             self._append(f"Proyecto: {project}")
             process = subprocess.Popen(
