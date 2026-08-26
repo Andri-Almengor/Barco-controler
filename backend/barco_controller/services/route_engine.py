@@ -6,13 +6,14 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..storage.repositories import RouteRepository
+from .external_sources import ExternalRendererService
 from .workplace import WallItem, WorkplaceController
 
 
 @dataclass
 class RouteRuntime:
     route_id: str
-    state: str = "stopped"  # stopped | running | paused | error
+    state: str = "stopped"
     index: int = 0
     last_error: str | None = None
     last_item: dict[str, Any] | None = None
@@ -25,12 +26,29 @@ class RouteRuntime:
 class RouteEngine:
     """Backend route scheduler with explicit state and cancellation generation."""
 
-    def __init__(self, routes: RouteRepository, workplace: WorkplaceController):
+    def __init__(self, routes: RouteRepository, workplace: WorkplaceController, external: ExternalRendererService | None = None, cfg: dict[str, Any] | None = None):
         self.routes = routes
         self.workplace = workplace
+        self.external = external
+        self.cfg = cfg or {}
         self._runtimes: dict[str, RouteRuntime] = {}
         self._lock = threading.RLock()
         self._events: list[dict[str, Any]] = []
+
+    def _local_origin(self) -> str:
+        server = self.cfg.get("server") or {}
+        port = int(server.get("port") or 8080)
+        return f"http://127.0.0.1:{port}"
+
+    def _resolve_item(self, raw_item: dict[str, Any]) -> WallItem:
+        kind = str(raw_item.get("kind") or "composition").lower()
+        item_id = str(raw_item.get("id") or "")
+        label = str(raw_item.get("label") or "")
+        if kind == "external":
+            if not self.external:
+                raise RuntimeError("El renderer externo no está disponible")
+            return self.external.activate(item_id, local_origin=self._local_origin())
+        return WallItem(kind=kind, id=item_id, label=label)
 
     def _log(self, level: str, message: str, **extra: Any) -> None:
         with self._lock:
@@ -128,6 +146,15 @@ class RouteEngine:
     def state_for_workplace(self, workplace_id: str) -> list[dict[str, Any]]:
         return [self.status(str(route["id"])) for route in self.routes.list() if str(route.get("workplaceId")) == str(workplace_id)]
 
+    def stop_all(self, *, clear_wall: bool = False) -> None:
+        for route in self.routes.list():
+            route_id = str(route.get("id") or "")
+            if route_id:
+                try:
+                    self.stop(route_id, clear_wall=clear_wall)
+                except Exception:
+                    pass
+
     def _worker(self, route_id: str, generation: int) -> None:
         runtime = self._runtime(route_id)
         while True:
@@ -145,10 +172,13 @@ class RouteEngine:
             items = route["items"]
             idx = runtime.index % len(items)
             raw_item = items[idx]
-            item = WallItem(kind=str(raw_item.get("kind") or "composition"), id=str(raw_item.get("id") or ""), label=str(raw_item.get("label") or ""))
             try:
                 workplace_id = str(route["workplaceId"])
                 with self.workplace.exclusive(workplace_id, owner=f"route:{route_id}"):
+                    with self._lock:
+                        if runtime.generation != generation or runtime.state != "running":
+                            return
+                    item = self._resolve_item(raw_item)
                     with self._lock:
                         if runtime.generation != generation or runtime.state != "running":
                             return
@@ -159,7 +189,7 @@ class RouteEngine:
                     runtime.last_item = {"index": idx, **raw_item}
                     runtime.index = (idx + 1) % len(items)
                     runtime.last_error = None
-                self._log("ok", f"Recorrido {route.get('name')}: {item.label or item.id}", routeId=route_id)
+                self._log("ok", f"Recorrido {route.get('name')}: {raw_item.get('label') or raw_item.get('id')}", routeId=route_id)
             except Exception as exc:
                 with self._lock:
                     if runtime.generation != generation:

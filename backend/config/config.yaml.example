@@ -36,3 +36,16 @@ cameras:
   default_cooldown_sec: 20
   frame_width: 640
   frame_height: 360
+
+# Renderers locales: cada renderer corresponde a una fuente VNC ya creada en Barco CTRL.
+# El PC abre páginas, imágenes o videos y CTRL recibe la pantalla mediante VNC, sin Barco Gateway.
+renderers:
+  - id: main
+    name: Renderer principal
+    barco_source_id: CHANGE_TO_VNC_SOURCE_ID
+    barco_source_label: Renderer web local
+    browser_path: ""
+    launch_mode: kiosk
+    startup_delay_sec: 1.5
+    profile_dir: data/browser-profile-main
+    extra_args: []

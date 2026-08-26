@@ -7,24 +7,28 @@ from flask import Flask, jsonify, request, send_from_directory
 from .api.auth import create_auth_blueprint
 from .api.cameras import create_cameras_blueprint
 from .api.control import create_control_blueprint
+from .api.external import create_external_blueprint
 from .api.routes import create_routes_blueprint
+from .api.setup import create_setup_blueprint
 from .config import BACKEND_ROOT, getenv, safe_public_config
 from .security import require_operator
-from .state import create_state
+from .state import StateManager
 
 
 def create_app() -> Flask:
     static_dir = BACKEND_ROOT / "static"
     app = Flask(__name__, static_folder=str(static_dir), static_url_path="/")
-    state = create_state()
+    state = StateManager()
     app.config["BARCO_STATE"] = state
     app.secret_key = getenv("BARCO_APP_SECRET") or secrets.token_hex(32)
     app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
 
+    app.register_blueprint(create_setup_blueprint(state), url_prefix="/api")
     app.register_blueprint(create_auth_blueprint(state), url_prefix="/api")
     app.register_blueprint(create_control_blueprint(state), url_prefix="/api")
     app.register_blueprint(create_routes_blueprint(state), url_prefix="/api")
     app.register_blueprint(create_cameras_blueprint(state), url_prefix="/api")
+    app.register_blueprint(create_external_blueprint(state), url_prefix="/api")
 
     @app.get("/api/config")
     @require_operator(state)

@@ -1,16 +1,38 @@
-export type RouteKind = 'composition' | 'source'
+export type RouteKind = 'composition' | 'source' | 'external'
 export type RouteItem = { kind: RouteKind; id: string; label?: string }
 export type Route = { id: string; name: string; intervalSec: number; workplaceId: string; items: RouteItem[]; updatedAt?: number }
-export type Workplace = { id: string; name: string; geometry?: { type: string; x: number; y: number; width: number; height: number } }
+export type Geometry = { type: string; x: number; y: number; width: number; height: number }
+export type Workplace = { id: string; name: string; geometry?: Geometry }
 export type RouteRuntime = { routeId: string; routeName?: string; state: 'stopped' | 'running' | 'paused' | 'error'; index: number; lastError?: string | null; lastItem?: any; nextRunAt?: number | null }
 export type CameraRule = {
   id?: string; name: string; enabled: boolean; rtspUrl?: string; username?: string; password?: string; hasPassword?: boolean;
-  workplaceId?: string; displayKind?: RouteKind; itemId?: string; itemLabel?: string; group?: string; groupCompositionId?: string;
+  workplaceId?: string; displayKind?: 'composition' | 'source'; itemId?: string; itemLabel?: string; group?: string; groupCompositionId?: string;
   priority?: number; durationSec?: number; cooldownSec?: number; scheduleStart?: string; scheduleEnd?: string;
   enabledHoursOnly?: boolean; detectionMode?: 'manual' | 'frame_diff'; minArea?: number; updatedAt?: number
 }
 export type CameraStatus = { running: boolean; opencvAvailable: boolean; activeEvent: any | null; activeUntil: number; queue: any[]; logs: LogEntry[]; rulesCount: number }
 export type LogEntry = { ts: number; level: string; message: string }
+export type ExternalType = 'web' | 'image' | 'video'
+export type ExternalSource = { id?: string; name: string; type: ExternalType; url: string; rendererId: string; enabled: boolean; updatedAt?: number }
+export type RendererConfig = {
+  id: string; name: string; barco_source_id: string; barco_source_label: string; browser_path: string;
+  launch_mode: 'kiosk' | 'app' | 'fullscreen'; startup_delay_sec: number; profile_dir: string; extra_args: string[]
+}
+export type SystemConfig = {
+  server: { host: string; port: number; cors_origins?: string[]; trust_proxy?: boolean }
+  barco: {
+    base_url: string; api_base: string;
+    oidc: { realm: string; client_id: string; client_secret_env: string }
+    tls: { verify_tls: boolean }
+    request_timeout_sec: number; pre_clear_delay_ms: number
+  }
+  workplaces: Workplace[]
+  routes: { default_interval_sec?: number; minimum_interval_sec?: number }
+  cameras: Record<string, any>
+  renderers: RendererConfig[]
+}
+export type SetupStatus = { configured: boolean; configError?: string | null; remoteSetupEnabled?: boolean }
+export type RendererStatus = { active: Array<{ rendererId: string; sourceId: string; sourceName: string; sourceType: string; url: string; pid: number; running: boolean; startedAt: number; barcoSourceId: string }>; detectedBrowsers: Array<{ name: string; path: string }> }
 
 async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(url, {
@@ -27,9 +49,16 @@ async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
 
 export const api = {
   health: () => request<{ ok: boolean }>('/api/health'),
-  authStatus: () => request<{ authenticated: boolean; accessValid: boolean; expiresAt: number | null }>('/api/status'),
+  setupStatus: () => request<SetupStatus>('/api/setup/status'),
+  setupConfig: () => request<SystemConfig>('/api/setup/config'),
+  setupBrowsers: () => request<Array<{ name: string; path: string }>>('/api/setup/browsers'),
+  testSetup: (config: SystemConfig) => request<{ ok: boolean; issuer?: string; tokenEndpoint?: string }>('/api/setup/test', { method: 'POST', body: JSON.stringify({ config }) }),
+  saveSetup: (config: SystemConfig) => request<{ ok: boolean; config: SystemConfig; restartRequiredForServerBinding: boolean }>('/api/setup/config', { method: 'POST', body: JSON.stringify({ config }) }),
+
+  authStatus: () => request<{ configured?: boolean; authenticated: boolean; accessValid: boolean; expiresAt: number | null }>('/api/status'),
   login: (username: string, password: string) => request('/api/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
   logout: () => request('/api/logout', { method: 'POST' }),
+  publicConfig: () => request<SystemConfig>('/api/config'),
   workplaces: () => request<Workplace[]>('/api/workplaces'),
   compositions: () => request<any[]>('/api/compositions'),
   sources: (workplaceId: string) => request<any[]>(`/api/sources?workplaceId=${encodeURIComponent(workplaceId)}`),
@@ -45,6 +74,14 @@ export const api = {
   pauseRoute: (id: string) => request('/api/routes/' + encodeURIComponent(id) + '/pause', { method: 'POST' }),
   resumeRoute: (id: string) => request('/api/routes/' + encodeURIComponent(id) + '/resume', { method: 'POST' }),
   routeLogs: () => request<LogEntry[]>('/api/routes/logs'),
+
+  externalSources: () => request<ExternalSource[]>('/api/external-sources'),
+  saveExternalSource: (source: ExternalSource) => request<{ ok: boolean; source: ExternalSource }>('/api/external-sources', { method: 'POST', body: JSON.stringify(source) }),
+  deleteExternalSource: (id: string) => request('/api/external-sources/' + encodeURIComponent(id), { method: 'DELETE' }),
+  prepareExternalSource: (id: string) => request('/api/external-sources/' + encodeURIComponent(id) + '/prepare', { method: 'POST' }),
+  showExternalSource: (id: string, workplaceId: string) => request('/api/external-sources/' + encodeURIComponent(id) + '/show', { method: 'POST', body: JSON.stringify({ workplaceId }) }),
+  rendererStatus: () => request<RendererStatus>('/api/external-renderer/status'),
+  stopRenderer: (id: string) => request('/api/external-renderer/' + encodeURIComponent(id) + '/stop', { method: 'POST' }),
 
   cameraRules: () => request<CameraRule[]>('/api/camera-rules'),
   saveCameraRule: (rule: CameraRule) => request<{ ok: boolean; rule: CameraRule }>('/api/camera-rules', { method: 'POST', body: JSON.stringify(rule) }),

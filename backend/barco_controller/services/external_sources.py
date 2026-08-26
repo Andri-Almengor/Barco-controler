@@ -1,0 +1,173 @@
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import threading
+import time
+from pathlib import Path
+from typing import Any
+from urllib.parse import quote
+
+from ..config import BACKEND_ROOT
+from ..storage.repositories import ExternalSourceRepository
+from .workplace import WallItem
+
+
+class ExternalRendererError(RuntimeError):
+    pass
+
+
+class ExternalRendererService:
+    """Render Internet content on a local browser and expose it to CTRL through a VNC source.
+
+    Barco CTRL common web sources shown on walls require the Barco Gateway. This service
+    deliberately uses a different path: the controller PC renders the content locally and
+    Barco sees the PC through a configured VNC source. It therefore does not depend on a
+    Barco Gateway.
+    """
+
+    def __init__(self, repository: ExternalSourceRepository, cfg: dict[str, Any]):
+        self.repository = repository
+        self.cfg = cfg
+        self._lock = threading.RLock()
+        self._processes: dict[str, subprocess.Popen[Any]] = {}
+        self._active: dict[str, dict[str, Any]] = {}
+
+    @staticmethod
+    def detect_browsers() -> list[dict[str, str]]:
+        candidates: list[tuple[str, str]] = []
+        if os.name == "nt":
+            program_files = [os.environ.get("PROGRAMFILES"), os.environ.get("PROGRAMFILES(X86)"), os.environ.get("LOCALAPPDATA")]
+            for root in [value for value in program_files if value]:
+                candidates.extend([
+                    ("Microsoft Edge", str(Path(root) / "Microsoft/Edge/Application/msedge.exe")),
+                    ("Google Chrome", str(Path(root) / "Google/Chrome/Application/chrome.exe")),
+                ])
+        else:
+            for label, name in (("Google Chrome", "google-chrome"), ("Chromium", "chromium"), ("Chromium", "chromium-browser"), ("Microsoft Edge", "microsoft-edge")):
+                resolved = shutil.which(name)
+                if resolved:
+                    candidates.append((label, resolved))
+        seen = set()
+        result = []
+        for label, path in candidates:
+            if path in seen or not Path(path).exists():
+                continue
+            seen.add(path)
+            result.append({"name": label, "path": path})
+        return result
+
+    def _renderer(self, renderer_id: str) -> dict[str, Any]:
+        for renderer in self.cfg.get("renderers") or []:
+            if str(renderer.get("id")) == str(renderer_id):
+                return renderer
+        raise ExternalRendererError(f"Renderer no encontrado: {renderer_id}")
+
+    def _browser_path(self, renderer: dict[str, Any]) -> str:
+        configured = str(renderer.get("browser_path") or "").strip()
+        if configured and Path(configured).exists():
+            return configured
+        detected = self.detect_browsers()
+        if detected:
+            return detected[0]["path"]
+        raise ExternalRendererError("No se encontró Microsoft Edge, Chrome o Chromium. Configura browser_path.")
+
+    @staticmethod
+    def _profile_path(renderer: dict[str, Any]) -> Path:
+        configured = str(renderer.get("profile_dir") or "").strip()
+        path = Path(configured)
+        if not path.is_absolute():
+            path = BACKEND_ROOT / path
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _target_url(self, source: dict[str, Any], local_origin: str) -> str:
+        if source.get("type") == "web":
+            return str(source["url"])
+        return f"{local_origin.rstrip('/')}/renderer/{quote(str(source['id']))}"
+
+    def _args(self, browser: str, renderer: dict[str, Any], target_url: str) -> list[str]:
+        args = [browser, "--no-first-run", "--no-default-browser-check", f"--user-data-dir={self._profile_path(renderer)}"]
+        mode = str(renderer.get("launch_mode") or "kiosk").lower()
+        if mode == "app":
+            args.append(f"--app={target_url}")
+        elif mode == "fullscreen":
+            args.extend(["--start-fullscreen", target_url])
+        else:
+            args.extend(["--kiosk", "--disable-session-crashed-bubble"])
+            if "msedge" in Path(browser).name.lower():
+                args.append("--edge-kiosk-type=fullscreen")
+            args.append(target_url)
+        args.extend(str(value) for value in (renderer.get("extra_args") or []))
+        return args
+
+    @staticmethod
+    def _terminate_process(process: subprocess.Popen[Any]) -> None:
+        if process.poll() is not None:
+            return
+        try:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5, check=False)
+            else:
+                process.terminate()
+                process.wait(timeout=3)
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+
+    def activate(self, source_id: str, *, local_origin: str) -> WallItem:
+        source = self.repository.get(source_id)
+        if not source:
+            raise ValueError("Contenido externo no encontrado")
+        if not source.get("enabled", True):
+            raise ValueError("El contenido externo está deshabilitado")
+        renderer = self._renderer(str(source.get("rendererId") or "main"))
+        barco_source_id = str(renderer.get("barco_source_id") or "").strip()
+        if not barco_source_id:
+            raise ExternalRendererError("El renderer no tiene asociada una fuente VNC de Barco")
+
+        browser = self._browser_path(renderer)
+        target_url = self._target_url(source, local_origin)
+        renderer_id = str(renderer.get("id") or "main")
+
+        with self._lock:
+            previous = self._processes.pop(renderer_id, None)
+            if previous:
+                self._terminate_process(previous)
+            process = subprocess.Popen(self._args(browser, renderer, target_url), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self._processes[renderer_id] = process
+            self._active[renderer_id] = {
+                "rendererId": renderer_id,
+                "sourceId": source_id,
+                "sourceName": source.get("name"),
+                "sourceType": source.get("type"),
+                "url": source.get("url"),
+                "pid": process.pid,
+                "startedAt": time.time(),
+                "barcoSourceId": barco_source_id,
+            }
+
+        delay = max(0.0, float(renderer.get("startup_delay_sec") or 0))
+        if delay:
+            time.sleep(delay)
+        return WallItem("source", barco_source_id, str(renderer.get("barco_source_label") or source.get("name") or "Renderer"))
+
+    def stop(self, renderer_id: str) -> None:
+        with self._lock:
+            process = self._processes.pop(renderer_id, None)
+            self._active.pop(renderer_id, None)
+        if process:
+            self._terminate_process(process)
+
+    def status(self) -> dict[str, Any]:
+        with self._lock:
+            active = []
+            for renderer_id, value in list(self._active.items()):
+                process = self._processes.get(renderer_id)
+                row = dict(value)
+                row["running"] = bool(process and process.poll() is None)
+                active.append(row)
+            return {"active": active, "detectedBrowsers": self.detect_browsers()}

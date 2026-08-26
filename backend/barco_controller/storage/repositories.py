@@ -3,15 +3,16 @@ from __future__ import annotations
 import time
 import uuid
 from typing import Any
+from urllib.parse import urlparse
 
 from .json_store import JsonStore
 
 
 def normalize_route_item(item: dict[str, Any]) -> dict[str, str]:
     kind = str(item.get("kind") or "composition").strip().lower()
-    if kind not in {"composition", "source"}:
+    if kind not in {"composition", "source", "external"}:
         kind = "composition"
-    item_id = str(item.get("id") or item.get("sourceId") or item.get("compositionId") or "").strip()
+    item_id = str(item.get("id") or item.get("sourceId") or item.get("compositionId") or item.get("externalId") or "").strip()
     return {"kind": kind, "id": item_id, "label": str(item.get("label") or "")}
 
 
@@ -114,3 +115,48 @@ class CameraRuleRepository:
 
     def delete(self, rule_id: str) -> None:
         self.store.write([r for r in self.list_raw() if str(r.get("id")) != str(rule_id)])
+
+
+class ExternalSourceRepository:
+    VALID_TYPES = {"web", "image", "video"}
+
+    def __init__(self, store: JsonStore):
+        self.store = store
+
+    def list(self) -> list[dict[str, Any]]:
+        value = self.store.read()
+        return value if isinstance(value, list) else []
+
+    def get(self, source_id: str) -> dict[str, Any] | None:
+        return next((item for item in self.list() if str(item.get("id")) == str(source_id)), None)
+
+    @staticmethod
+    def _validate_url(url: str) -> str:
+        url = str(url or "").strip()
+        parsed = urlparse(url)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("La URL debe comenzar con http:// o https://")
+        return url
+
+    def save(self, body: dict[str, Any]) -> dict[str, Any]:
+        items = self.list()
+        source_id = str(body.get("id") or uuid.uuid4())
+        kind = str(body.get("type") or "web").strip().lower()
+        if kind not in self.VALID_TYPES:
+            raise ValueError("Tipo externo no soportado")
+        item = {
+            "id": source_id,
+            "name": str(body.get("name") or "Contenido externo").strip() or "Contenido externo",
+            "type": kind,
+            "url": self._validate_url(str(body.get("url") or "")),
+            "rendererId": str(body.get("rendererId") or "main").strip() or "main",
+            "enabled": bool(body.get("enabled", True)),
+            "updatedAt": int(time.time()),
+        }
+        items = [entry for entry in items if str(entry.get("id")) != source_id]
+        items.insert(0, item)
+        self.store.write(items)
+        return item
+
+    def delete(self, source_id: str) -> None:
+        self.store.write([item for item in self.list() if str(item.get("id")) != str(source_id)])
