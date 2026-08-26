@@ -15,7 +15,7 @@ export type LogEntry = { ts: number; level: string; message: string }
 export type ExternalType = 'web' | 'image' | 'video'
 export type ExternalSource = { id?: string; name: string; type: ExternalType; url: string; rendererId: string; enabled: boolean; updatedAt?: number }
 export type RendererConfig = {
-  id: string; name: string; barco_source_id: string; barco_source_label: string; browser_path: string;
+  id: string; name: string; barco_source_id: string; barco_source_label: string; vnc_host: string; vnc_port: number; browser_path: string;
   launch_mode: 'kiosk' | 'app' | 'fullscreen'; startup_delay_sec: number; profile_dir: string; extra_args: string[]
 }
 export type SystemConfig = {
@@ -33,6 +33,15 @@ export type SystemConfig = {
 }
 export type SetupStatus = { configured: boolean; configError?: string | null; remoteSetupEnabled?: boolean }
 export type DiscoveryResult = { ok: boolean; authMode: 'temporary' | 'existing-session'; selectedWorkplaceId: string; workplaces: any[]; sources: any[]; compositions: any[]; warnings: string[] }
+export type DiagnosticCheck = { id: string; label: string; status: 'ok' | 'warn' | 'error'; detail: string; meta?: Record<string, any> }
+export type DiagnosticsResult = {
+  ready: boolean; time: number; checks: DiagnosticCheck[]; vnc: Record<string, any>;
+  install: { supported: boolean; package: string; script: string; requiresAdministrator: boolean; command: string }
+}
+export type LocalDiagnostics = {
+  time: number; platform: string; vnc: Record<string, any>; browsers: Array<{ name: string; path: string }>;
+  recommended: { vncHost: string; vncPort: number; windowsInstallCommand: string }
+}
 export type RendererStatus = { active: Array<{ rendererId: string; sourceId: string; sourceName: string; sourceType: string; url: string; pid: number; running: boolean; startedAt: number; barcoSourceId: string }>; detectedBrowsers: Array<{ name: string; path: string }> }
 
 async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
@@ -56,6 +65,8 @@ export const api = {
   testSetup: (config: SystemConfig) => request<{ ok: boolean; issuer?: string; tokenEndpoint?: string }>('/api/setup/test', { method: 'POST', body: JSON.stringify({ config }) }),
   discoverSetup: (config: SystemConfig, username = '', password = '', workplaceId = '') => request<DiscoveryResult>('/api/setup/discover', { method: 'POST', body: JSON.stringify({ config, username, password, workplaceId }) }),
   saveSetup: (config: SystemConfig) => request<{ ok: boolean; config: SystemConfig; restartRequiredForServerBinding: boolean }>('/api/setup/config', { method: 'POST', body: JSON.stringify({ config }) }),
+  diagnostics: () => request<DiagnosticsResult>('/api/diagnostics'),
+  localDiagnostics: (config: SystemConfig) => request<LocalDiagnostics>('/api/diagnostics/local', { method: 'POST', body: JSON.stringify({ config }) }),
 
   authStatus: () => request<{ configured?: boolean; authenticated: boolean; accessValid: boolean; expiresAt: number | null }>('/api/status'),
   login: (username: string, password: string) => request('/api/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
