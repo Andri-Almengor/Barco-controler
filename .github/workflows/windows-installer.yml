@@ -12,6 +12,7 @@ on:
       - 'frontend/**'
       - 'packaging/**'
       - 'scripts/**'
+      - 'tools/**'
       - 'build_windows.ps1'
       - '.github/workflows/windows-installer.yml'
   pull_request:
@@ -20,6 +21,7 @@ on:
       - 'frontend/**'
       - 'packaging/**'
       - 'scripts/**'
+      - 'tools/**'
       - 'build_windows.ps1'
       - '.github/workflows/windows-installer.yml'
 
@@ -51,6 +53,15 @@ jobs:
           python -m pip install -r backend/requirements.txt
           python -m pip install pyinstaller==6.10.0
 
+      - name: Build Installer Builder.exe
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --clean --onefile --windowed `
+            --name BarcoController-Builder `
+            --distpath builder_output `
+            --workpath build/builder `
+            tools/installer_builder.py
+
       - name: Build frontend
         shell: pwsh
         run: |
@@ -81,4 +92,11 @@ jobs:
         with:
           name: BarcoController-Setup
           path: installer_output/BarcoController-Setup.exe
+          if-no-files-found: error
+
+      - name: Upload Builder.exe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BarcoController-Builder
+          path: builder_output/BarcoController-Builder.exe
           if-no-files-found: error
