@@ -81,7 +81,13 @@ El Builder evita tener que recordar comandos. Muestra el proceso en una ventana,
 
 `Builder.exe` es una herramienta para quien desarrolla/compila el proyecto; el usuario final solo necesita `BarcoController-Setup.exe`.
 
-El código fuente del Builder está en `tools/installer_builder.py` y GitHub Actions publica `BarcoController-Builder.exe` como artifact independiente.
+El código fuente del Builder está en `tools/installer_builder.py` y el ejecutable compilado queda versionado directamente en:
+
+```text
+tools/bin/BarcoController-Builder.exe
+```
+
+GitHub Actions vuelve a compilarlo y actualiza automáticamente ese archivo después de una compilación correcta. También lo publica como artifact independiente.
 
 ## Construir el Setup.exe
 
@@ -92,6 +98,8 @@ También se puede ejecutar directamente:
 ```
 
 El script compila React, ejecuta las pruebas, congela Python con PyInstaller y genera `installer_output\BarcoController-Setup.exe` mediante Inno Setup.
+
+La detección de Inno Setup busca `ISCC.exe` en PATH, `Program Files`, `%LOCALAPPDATA%\Programs\Inno Setup 6` y las claves de registro de Windows. Si no está instalado y WinGet está disponible, intenta instalarlo para el usuario actual y vuelve a detectarlo.
 
 `.github/workflows/windows-installer.yml` construye automáticamente tanto `BarcoController-Setup.exe` como `BarcoController-Builder.exe` en un runner Windows.
 
