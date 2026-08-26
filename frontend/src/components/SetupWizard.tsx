@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, type DiscoveryResult, type RendererConfig, type SystemConfig } from '../api'
+import { api, type DiscoveryResult, type LocalDiagnostics, type RendererConfig, type SystemConfig } from '../api'
 import { defaultRenderer, idOf, labelOf, looksLikeVnc } from '../helpers'
 
 export default function SetupWizard({ onConfigured }: { onConfigured: () => void }) {
   const [draft, setDraft] = useState<SystemConfig | null>(null)
   const [browsers, setBrowsers] = useState<Array<{ name: string; path: string }>>([])
+  const [localHealth, setLocalHealth] = useState<LocalDiagnostics | null>(null)
   const [inventory, setInventory] = useState<DiscoveryResult | null>(null)
   const [ctrlUser, setCtrlUser] = useState('')
   const [ctrlPassword, setCtrlPassword] = useState('')
@@ -14,9 +15,15 @@ export default function SetupWizard({ onConfigured }: { onConfigured: () => void
 
   useEffect(() => {
     Promise.all([api.setupConfig(), api.setupBrowsers()])
-      .then(([cfg, detected]) => {
-        setDraft(cfg)
+      .then(async ([cfg, detected]) => {
+        const renderer = cfg.renderers[0] || defaultRenderer()
+        const normalized = {
+          ...cfg,
+          renderers: [{ ...renderer, vnc_host: renderer.vnc_host || '127.0.0.1', vnc_port: renderer.vnc_port || 5900 }, ...cfg.renderers.slice(1)],
+        }
+        setDraft(normalized)
         setBrowsers(detected)
+        try { setLocalHealth(await api.localDiagnostics(normalized)) } catch { }
       })
       .catch(e => setError(e.message))
   }, [])
@@ -94,10 +101,23 @@ export default function SetupWizard({ onConfigured }: { onConfigured: () => void
     await discover(workplaceId)
   }
 
+  async function checkLocalVnc() {
+    try {
+      const result = await api.localDiagnostics(draft)
+      setLocalHealth(result)
+      if (result.vnc?.reachable) setMessage(`VNC local correcto: ${result.vnc.banner || 'RFB disponible'}`)
+      else setError(`VNC no responde en ${renderer.vnc_host || '127.0.0.1'}:${renderer.vnc_port || 5900}. Ejecuta el instalador VNC recomendado.`)
+    } catch (e: any) { setError(e.message) }
+  }
+
   async function save() {
     setError('')
     if (!workplace.id) {
       setError('Selecciona o escribe el ID del workplace principal.')
+      return
+    }
+    if (!renderer.barco_source_id) {
+      setError('Selecciona la fuente VNC del PC renderer en CTRL.')
       return
     }
     try {
@@ -116,7 +136,7 @@ export default function SetupWizard({ onConfigured }: { onConfigured: () => void
         <div>
           <span className="eyebrow">Primera ejecución</span>
           <h1>Configurar Barco Controller</h1>
-          <p>Conecta CTRL, detecta el wall y selecciona el renderer sin copiar IDs manualmente.</p>
+          <p>Conecta CTRL, detecta el wall, comprueba VNC y selecciona el renderer sin copiar IDs manualmente.</p>
         </div>
       </div>
 
@@ -130,48 +150,26 @@ export default function SetupWizard({ onConfigured }: { onConfigured: () => void
             <input value={draft.barco.base_url} onChange={e => setDraft({ ...draft, barco: { ...draft.barco, base_url: e.target.value } })} placeholder="https://192.168.68.200"/>
           </label>
           <div className="split">
-            <label>API base
-              <input value={draft.barco.api_base} onChange={e => setDraft({ ...draft, barco: { ...draft.barco, api_base: e.target.value } })}/>
-            </label>
-            <label>Realm OIDC
-              <input value={draft.barco.oidc.realm} onChange={e => setDraft({ ...draft, barco: { ...draft.barco, oidc: { ...draft.barco.oidc, realm: e.target.value } } })}/>
-            </label>
+            <label>API base<input value={draft.barco.api_base} onChange={e => setDraft({ ...draft, barco: { ...draft.barco, api_base: e.target.value } })}/></label>
+            <label>Realm OIDC<input value={draft.barco.oidc.realm} onChange={e => setDraft({ ...draft, barco: { ...draft.barco, oidc: { ...draft.barco.oidc, realm: e.target.value } } })}/></label>
           </div>
           <div className="split">
-            <label>Client ID
-              <input value={draft.barco.oidc.client_id} onChange={e => setDraft({ ...draft, barco: { ...draft.barco, oidc: { ...draft.barco.oidc, client_id: e.target.value } } })}/>
-            </label>
-            <label className="check setupCheck">
-              <input type="checkbox" checked={draft.barco.tls.verify_tls} onChange={e => setDraft({ ...draft, barco: { ...draft.barco, tls: { verify_tls: e.target.checked } } })}/>
-              Validar certificado TLS
-            </label>
+            <label>Client ID<input value={draft.barco.oidc.client_id} onChange={e => setDraft({ ...draft, barco: { ...draft.barco, oidc: { ...draft.barco.oidc, client_id: e.target.value } } })}/></label>
+            <label className="check setupCheck"><input type="checkbox" checked={draft.barco.tls.verify_tls} onChange={e => setDraft({ ...draft, barco: { ...draft.barco, tls: { verify_tls: e.target.checked } } })}/>Validar certificado TLS</label>
           </div>
           <div className="split">
-            <label>Usuario CTRL
-              <input value={ctrlUser} onChange={e => setCtrlUser(e.target.value)} autoComplete="username" placeholder="Solo para detectar"/>
-            </label>
-            <label>Contraseña CTRL
-              <input type="password" value={ctrlPassword} onChange={e => setCtrlPassword(e.target.value)} autoComplete="current-password" placeholder="No se guarda"/>
-            </label>
+            <label>Usuario CTRL<input value={ctrlUser} onChange={e => setCtrlUser(e.target.value)} autoComplete="username" placeholder="Solo para detectar"/></label>
+            <label>Contraseña CTRL<input type="password" value={ctrlPassword} onChange={e => setCtrlPassword(e.target.value)} autoComplete="current-password" placeholder="No se guarda"/></label>
           </div>
-          <p className="help">Estas credenciales se usan únicamente para consultar el inventario durante la instalación y no se guardan en config.yaml.</p>
-          <div className="controls compactControls">
-            <button onClick={testServer}>Probar OIDC</button>
-            <button className="primary" disabled={busy} onClick={() => discover()}>{busy ? 'Detectando…' : 'Conectar y detectar CTRL'}</button>
-          </div>
+          <p className="help">Estas credenciales solo consultan el inventario durante la instalación y no se guardan.</p>
+          <div className="controls compactControls"><button onClick={testServer}>Probar OIDC</button><button className="primary" disabled={busy} onClick={() => discover()}>{busy ? 'Detectando…' : 'Conectar y detectar CTRL'}</button></div>
         </section>
 
         <section>
           <h3>2. Workplace principal</h3>
           {inventory?.workplaces.length ? <label>Workplace detectado
-            <select value={workplace.id} onChange={e => chooseWorkplace(e.target.value)}>
-              <option value="">Selecciona…</option>
-              {inventory.workplaces.map(w => <option key={idOf(w)} value={idOf(w)}>{labelOf(w)}</option>)}
-            </select>
-          </label> : <>
-            <label>Nombre<input value={workplace.name} onChange={e => setWorkplace({ name: e.target.value })}/></label>
-            <label>ID del workplace<input value={workplace.id} onChange={e => setWorkplace({ id: e.target.value })} placeholder="Se completa automáticamente al detectar"/></label>
-          </>}
+            <select value={workplace.id} onChange={e => chooseWorkplace(e.target.value)}><option value="">Selecciona…</option>{inventory.workplaces.map(w => <option key={idOf(w)} value={idOf(w)}>{labelOf(w)}</option>)}</select>
+          </label> : <><label>Nombre<input value={workplace.name} onChange={e => setWorkplace({ name: e.target.value })}/></label><label>ID del workplace<input value={workplace.id} onChange={e => setWorkplace({ id: e.target.value })} placeholder="Se completa automáticamente al detectar"/></label></>}
           <div className="quad">
             <label>X<input type="number" value={workplace.geometry?.x || 0} onChange={e => setWorkplace({ geometry: { ...workplace.geometry!, x: Number(e.target.value) } })}/></label>
             <label>Y<input type="number" value={workplace.geometry?.y || 0} onChange={e => setWorkplace({ geometry: { ...workplace.geometry!, y: Number(e.target.value) } })}/></label>
@@ -181,52 +179,42 @@ export default function SetupWizard({ onConfigured }: { onConfigured: () => void
         </section>
 
         <section>
-          <h3>3. Renderer sin Gateway</h3>
+          <h3>3. VNC local</h3>
+          <div className={`vncStatus ${localHealth?.vnc?.reachable ? 'ok' : 'warn'}`}>
+            <strong>{localHealth?.vnc?.reachable ? 'VNC detectado' : 'VNC pendiente'}</strong>
+            <span>{localHealth?.vnc?.reachable ? `${localHealth.vnc.banner || 'RFB'} en ${renderer.vnc_host || '127.0.0.1'}:${renderer.vnc_port || 5900}` : 'El instalador de Windows puede instalar y asegurar TightVNC automáticamente.'}</span>
+          </div>
+          <div className="split">
+            <label>Host VNC<input value={renderer.vnc_host || '127.0.0.1'} onChange={e => setRenderer({ vnc_host: e.target.value })}/></label>
+            <label>Puerto VNC<input type="number" min="1" max="65535" value={renderer.vnc_port || 5900} onChange={e => setRenderer({ vnc_port: Number(e.target.value) })}/></label>
+          </div>
+          <button onClick={checkLocalVnc}>Comprobar VNC</button>
+          {!localHealth?.vnc?.reachable && <p className="help">Windows: <code>{localHealth?.recommended?.windowsInstallCommand || `powershell -ExecutionPolicy Bypass -File scripts\configure_vnc_windows.ps1 -InstallIfMissing -Port ${renderer.vnc_port || 5900}`}</code></p>}
+        </section>
+
+        <section>
+          <h3>4. Renderer sin Gateway</h3>
           <p className="help">El PC abre la web, imagen o video; CTRL recibe esa pantalla mediante una fuente VNC.</p>
           {sortedSources.length ? <label>Fuente del PC renderer en CTRL
-            <select value={renderer.barco_source_id} onChange={e => {
-              const selected = sortedSources.find(s => idOf(s) === e.target.value)
-              setRenderer({ barco_source_id: e.target.value, barco_source_label: labelOf(selected) })
-            }}>
-              <option value="">Selecciona la fuente VNC…</option>
-              {sortedSources.map(source => <option key={idOf(source)} value={idOf(source)}>{labelOf(source)}{looksLikeVnc(source) ? ' · VNC' : ''}</option>)}
+            <select value={renderer.barco_source_id} onChange={e => { const selected = sortedSources.find(s => idOf(s) === e.target.value); setRenderer({ barco_source_id: e.target.value, barco_source_label: labelOf(selected) }) }}>
+              <option value="">Selecciona la fuente VNC…</option>{sortedSources.map(source => <option key={idOf(source)} value={idOf(source)}>{labelOf(source)}{looksLikeVnc(source) ? ' · VNC' : ''}</option>)}
             </select>
-          </label> : <label>ID de fuente VNC en CTRL
-            <input value={renderer.barco_source_id} onChange={e => setRenderer({ barco_source_id: e.target.value })} placeholder="Se completa automáticamente al detectar"/>
-          </label>}
-          <label>Navegador
-            <select value={renderer.browser_path} onChange={e => setRenderer({ browser_path: e.target.value })}>
-              <option value="">Detectar automáticamente</option>
-              {browsers.map(b => <option key={b.path} value={b.path}>{b.name} — {b.path}</option>)}
-            </select>
-          </label>
+          </label> : <label>ID de fuente VNC en CTRL<input value={renderer.barco_source_id} onChange={e => setRenderer({ barco_source_id: e.target.value })} placeholder="Se completa automáticamente al detectar"/></label>}
+          <label>Navegador<select value={renderer.browser_path} onChange={e => setRenderer({ browser_path: e.target.value })}><option value="">Detectar automáticamente</option>{browsers.map(b => <option key={b.path} value={b.path}>{b.name} — {b.path}</option>)}</select></label>
           <div className="split">
-            <label>Modo
-              <select value={renderer.launch_mode} onChange={e => setRenderer({ launch_mode: e.target.value as RendererConfig['launch_mode'] })}>
-                <option value="kiosk">Kiosk</option>
-                <option value="fullscreen">Pantalla completa</option>
-                <option value="app">Ventana App</option>
-              </select>
-            </label>
-            <label>Espera inicial (s)
-              <input type="number" step="0.5" min="0" value={renderer.startup_delay_sec} onChange={e => setRenderer({ startup_delay_sec: Number(e.target.value) })}/>
-            </label>
+            <label>Modo<select value={renderer.launch_mode} onChange={e => setRenderer({ launch_mode: e.target.value as RendererConfig['launch_mode'] })}><option value="kiosk">Kiosk</option><option value="fullscreen">Pantalla completa</option><option value="app">Ventana App</option></select></label>
+            <label>Espera inicial (s)<input type="number" step="0.5" min="0" value={renderer.startup_delay_sec} onChange={e => setRenderer({ startup_delay_sec: Number(e.target.value) })}/></label>
           </div>
         </section>
 
         <section>
-          <h3>4. Servicio local</h3>
-          <div className="split">
-            <label>Host<input value={draft.server.host} onChange={e => setDraft({ ...draft, server: { ...draft.server, host: e.target.value } })}/></label>
-            <label>Puerto<input type="number" value={draft.server.port} onChange={e => setDraft({ ...draft, server: { ...draft.server, port: Number(e.target.value) } })}/></label>
-          </div>
+          <h3>5. Servicio local</h3>
+          <div className="split"><label>Host<input value={draft.server.host} onChange={e => setDraft({ ...draft, server: { ...draft.server, host: e.target.value } })}/></label><label>Puerto<input type="number" value={draft.server.port} onChange={e => setDraft({ ...draft, server: { ...draft.server, port: Number(e.target.value) } })}/></label></div>
           <p className="help">Cambiar host o puerto requiere reiniciar Barco Controller después de guardar.</p>
         </section>
       </div>
 
-      <div className="setupActions">
-        <button className="primary" onClick={save}>Guardar y continuar</button>
-      </div>
+      <div className="setupActions"><button className="primary" onClick={save}>Guardar y continuar</button></div>
     </div>
   </div>
 }
