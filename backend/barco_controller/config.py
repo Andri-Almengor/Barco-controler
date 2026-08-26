@@ -46,6 +46,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "name": "Renderer principal",
             "barco_source_id": "",
             "barco_source_label": "Renderer web local",
+            "vnc_host": "127.0.0.1",
+            "vnc_port": 5900,
             "browser_path": "",
             "launch_mode": "kiosk",
             "startup_delay_sec": 1.5,
@@ -134,6 +136,8 @@ def normalize_config(value: dict[str, Any] | None) -> dict[str, Any]:
         item["name"] = str(item.get("name") or renderer_id).strip()
         item["barco_source_id"] = str(item.get("barco_source_id") or "").strip()
         item["barco_source_label"] = str(item.get("barco_source_label") or item["name"]).strip()
+        item["vnc_host"] = str(item.get("vnc_host") or "127.0.0.1").strip() or "127.0.0.1"
+        item["vnc_port"] = max(1, min(65535, int(item.get("vnc_port") or 5900)))
         item["browser_path"] = str(item.get("browser_path") or "").strip()
         item["launch_mode"] = str(item.get("launch_mode") or "kiosk").strip().lower()
         if item["launch_mode"] not in {"kiosk", "app", "fullscreen"}:
