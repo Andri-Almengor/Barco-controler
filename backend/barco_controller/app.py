@@ -7,6 +7,7 @@ from flask import Flask, jsonify, request, send_from_directory
 from .api.auth import create_auth_blueprint
 from .api.cameras import create_cameras_blueprint
 from .api.control import create_control_blueprint
+from .api.diagnostics import create_diagnostics_blueprint
 from .api.external import create_external_blueprint
 from .api.routes import create_routes_blueprint
 from .api.setup import create_setup_blueprint
@@ -29,6 +30,7 @@ def create_app() -> Flask:
     app.register_blueprint(create_routes_blueprint(state), url_prefix="/api")
     app.register_blueprint(create_cameras_blueprint(state), url_prefix="/api")
     app.register_blueprint(create_external_blueprint(state), url_prefix="/api")
+    app.register_blueprint(create_diagnostics_blueprint(state), url_prefix="/api")
 
     @app.get("/api/config")
     @require_operator(state)
