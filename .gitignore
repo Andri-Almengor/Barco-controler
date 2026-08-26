@@ -18,6 +18,12 @@ backend/static/
 frontend/node_modules/
 frontend/dist/
 
+# Build / installer output
+build/
+dist/
+installer_output/
+*.spec.bak
+
 # Logs / installers
 *.log
 

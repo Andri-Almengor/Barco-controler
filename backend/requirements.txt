@@ -3,3 +3,5 @@ waitress==3.0.0
 requests==2.31.0
 PyYAML==6.0.1
 opencv-python-headless==4.10.0.84
+pystray==0.19.5
+Pillow==10.4.0

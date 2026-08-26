@@ -7,10 +7,7 @@ from typing import Any
 
 import yaml
 
-BACKEND_ROOT = Path(__file__).resolve().parents[1]
-CONFIG_DIR = BACKEND_ROOT / "config"
-DATA_DIR = BACKEND_ROOT / "data"
-CONFIG_PATH = CONFIG_DIR / "config.yaml"
+from .paths import BACKEND_ROOT, CONFIG_DIR, CONFIG_PATH, DATA_DIR, ENDPOINTS_PATH, RUNTIME_ROOT, ensure_runtime_dirs
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "server": {
@@ -177,7 +174,7 @@ def save_config(value: dict[str, Any]) -> dict[str, Any]:
     cfg = normalize_config(value)
     if not (cfg.get("barco") or {}).get("base_url"):
         raise ConfigurationError("La dirección del servidor Barco CTRL es requerida")
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_runtime_dirs()
     tmp = CONFIG_PATH.with_suffix(".yaml.tmp")
     with tmp.open("w", encoding="utf-8", newline="\n") as handle:
         yaml.safe_dump(cfg, handle, allow_unicode=True, sort_keys=False)
@@ -186,7 +183,7 @@ def save_config(value: dict[str, Any]) -> dict[str, Any]:
 
 
 def load_endpoints() -> dict[str, Any]:
-    return _load_yaml(CONFIG_DIR / "endpoints.yaml")
+    return _load_yaml(ENDPOINTS_PATH)
 
 
 def getenv(name: str | None, default: str | None = None) -> str | None:
@@ -197,7 +194,6 @@ def getenv(name: str | None, default: str | None = None) -> str | None:
 
 
 def safe_public_config(cfg: dict[str, Any]) -> dict[str, Any]:
-    """Configuration that can be displayed in the administration UI."""
     value = normalize_config(cfg)
     return {
         "server": value.get("server", {}),
@@ -213,4 +209,5 @@ def safe_public_config(cfg: dict[str, Any]) -> dict[str, Any]:
         "routes": value.get("routes", {}),
         "cameras": value.get("cameras", {}),
         "renderers": value.get("renderers", []),
+        "runtime": {"dataRoot": str(RUNTIME_ROOT)},
     }

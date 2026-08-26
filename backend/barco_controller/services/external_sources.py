@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from ..config import BACKEND_ROOT
+from ..paths import RUNTIME_ROOT
 from ..storage.repositories import ExternalSourceRepository
 from .workplace import WallItem
 
@@ -19,13 +19,7 @@ class ExternalRendererError(RuntimeError):
 
 
 class ExternalRendererService:
-    """Render Internet content on a local browser and expose it to CTRL through a VNC source.
-
-    Barco CTRL common web sources shown on walls require the Barco Gateway. This service
-    deliberately uses a different path: the controller PC renders the content locally and
-    Barco sees the PC through a configured VNC source. It therefore does not depend on a
-    Barco Gateway.
-    """
+    """Render Internet content on a local browser and expose it to CTRL through a VNC source."""
 
     def __init__(self, repository: ExternalSourceRepository, cfg: dict[str, Any]):
         self.repository = repository
@@ -75,10 +69,10 @@ class ExternalRendererService:
 
     @staticmethod
     def _profile_path(renderer: dict[str, Any]) -> Path:
-        configured = str(renderer.get("profile_dir") or "").strip()
+        configured = str(renderer.get("profile_dir") or "data/browser-profile-main").strip()
         path = Path(configured)
         if not path.is_absolute():
-            path = BACKEND_ROOT / path
+            path = RUNTIME_ROOT / path
         path.mkdir(parents=True, exist_ok=True)
         return path
 

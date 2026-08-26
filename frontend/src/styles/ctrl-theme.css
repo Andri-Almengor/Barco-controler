@@ -1,0 +1,57 @@
+/*
+  Visual system adapted from the CTRL-style reference project supplied for Barco Controller.
+  It intentionally reuses layout language (graphite shell, compact top bar, wide navigation,
+  two-column editors and blue action states) without copying the reference implementation.
+*/
+:root{
+  --bg:#141414;
+  --panel:#1a1a1a;
+  --panel2:#1f1f1f;
+  --line:#2a2a2a;
+  --muted:#a7a7a7;
+  --text:#f1f1f1;
+  --blue:#1f78ff;
+  --red:#ff4d4d;
+  --green:#22c55e;
+  --amber:#e6b552;
+}
+body{background:#141414;color:var(--text);font-family:"Segoe UI",system-ui,-apple-system,Roboto,Arial,sans-serif}
+.appShell{background:#141414}
+header{height:54px;background:linear-gradient(180deg,#1b1b1b,#151515);border-bottom:1px solid #2a2a2a;padding:0 16px}
+.productMark{background:#cf1b22;border-radius:2px;box-shadow:none;color:#fff;font-weight:800;letter-spacing:.08em}
+.productMark.small{width:46px;height:28px;border-radius:2px;font-size:11px}
+.brand{gap:10px}.brand strong{font-size:14px}.brand small{color:#9b9b9b;font-size:11px}
+.headerStatus{color:#a7a7a7}.dot.ok{background:#22c55e;box-shadow:0 0 0 3px #22c55e20}
+.layout{grid-template-columns:300px 1fr;min-height:calc(100vh - 54px)}
+aside{background:#1a1a1a;border-right:1px solid #2a2a2a;padding:12px}
+aside select{border-radius:3px;background:#121212}
+.sectionLabel{font-size:11px;color:#8e8e8e;letter-spacing:.08em;margin:2px 0 8px}
+nav{gap:7px;margin-top:16px;border-top:1px solid #2a2a2a;padding-top:14px}
+nav button{border:1px solid #2a2a2a;background:#141414;color:#e8e8e8;border-radius:2px;padding:10px 12px}
+nav button:hover{background:#202020;border-color:#3a3a3a}
+nav button.active{background:#1f78ff2e;border-color:#1f78ffb0;color:#fff}
+main{padding:16px}
+.twoCol{grid-template-columns:420px minmax(0,1fr);gap:16px}
+.panel{background:#1f1f1f;border:1px solid #2a2a2a;border-radius:6px;padding:14px;box-shadow:0 6px 18px #00000073}
+.panel h2{font-size:16px}.panel h3{font-size:13px}.panel p{color:#a7a7a7}
+.panelHead{padding-bottom:10px;border-bottom:1px solid #2a2a2a;margin-bottom:12px}
+button{border-radius:4px;border-color:#2f2f2f;background:#1a1a1a}
+button:hover:not(:disabled){background:#222;border-color:#444}
+.primary{background:linear-gradient(180deg,#1f78ff,#0b5fe0);border-color:#1f78ffb0;color:#fff}
+.primary:hover:not(:disabled){background:linear-gradient(180deg,#2b86ff,#0b5fe0)}
+.danger{background:#3c1b1d;border-color:#7b3438;color:#ffc8cb}
+input,select{background:#121212;border-color:#2a2a2a;border-radius:4px;padding:10px 12px}
+input:focus,select:focus{border-color:#1f78ffb0;box-shadow:0 0 0 3px #1f78ff2e}
+.list{gap:8px}.list>button{background:#141414;border-radius:4px;padding:11px 12px}.list>button.selected{background:#1f78ff2e;border-color:#1f78ffb0}
+.runtimeBar{background:#171717;border-color:#2a2a2a;border-radius:4px}
+.state{border-radius:999px}.state.running{color:#7fe6aa;background:#153023;border-color:#2f7550}.state.paused{color:#ffd98b}.state.error{color:#ffb2b7}
+.item{background:#141414;border-color:#2a2a2a;border-radius:4px}.badge{border-radius:999px;background:#1f78ff29;border-color:#1f78ff59;color:#cfe2ff}.badge.source{background:#ffffff12;border-color:#ffffff2b;color:#ddd}.badge.external{background:#8e44ad25;border-color:#8e44ad70;color:#e5c6f3}
+.adder{grid-template-columns:1fr 42px}.adder select{background:#141414}
+.manualGrid>div{border:1px solid #2a2a2a;background:#181818;border-radius:5px;padding:12px}.manualGrid button{background:#141414}
+.settingsGrid>div,.setupGrid section{background:#181818;border-color:#2a2a2a;border-radius:6px}
+.setupPage{background:#101010}.setupCard{background:#1c1c1c;border-color:#2a2a2a;border-radius:6px;box-shadow:0 6px 18px #00000073}.setupHero{border-color:#2a2a2a}
+.login{background:#101010;position:relative}.loginCard{background:#1c1c1c;border-color:#2a2a2a;border-radius:4px;box-shadow:0 6px 18px #00000073}
+.infoBox,.rendererRow{background:#171717;border-color:#2a2a2a;border-radius:4px}
+.log{background:#171717;border-color:#242424}
+@media(max-width:1100px){.layout{grid-template-columns:1fr}aside{border-right:0;border-bottom:1px solid #2a2a2a}nav{grid-template-columns:repeat(3,1fr)}.twoCol{grid-template-columns:1fr}}
+@media(max-width:760px){nav{grid-template-columns:1fr 1fr}.productMark.small{width:38px}.headerStatus{font-size:0}}
