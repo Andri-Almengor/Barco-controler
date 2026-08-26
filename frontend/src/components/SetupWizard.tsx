@@ -37,14 +37,15 @@ export default function SetupWizard({ onConfigured }: { onConfigured: () => void
     return <div className="splash"><div className="spinner"/><p>{error || 'Preparando asistente…'}</p></div>
   }
 
-  const workplace = draft.workplaces[0] || {
+  const currentDraft: SystemConfig = draft
+  const workplace = currentDraft.workplaces[0] || {
     id: '',
     name: 'Wall principal',
     geometry: { type: 'px', x: 0, y: 0, width: 3840, height: 2160 },
   }
-  const renderer = draft.renderers[0] || defaultRenderer()
-  const setWorkplace = (patch: any) => setDraft({ ...draft, workplaces: [{ ...workplace, ...patch }] })
-  const setRenderer = (patch: Partial<RendererConfig>) => setDraft({ ...draft, renderers: [{ ...renderer, ...patch }] })
+  const renderer = currentDraft.renderers[0] || defaultRenderer()
+  const setWorkplace = (patch: any) => setDraft({ ...currentDraft, workplaces: [{ ...workplace, ...patch }] })
+  const setRenderer = (patch: Partial<RendererConfig>) => setDraft({ ...currentDraft, renderers: [{ ...renderer, ...patch }] })
 
   function applyInventory(result: DiscoveryResult, preferredWorkplaceId = '') {
     setInventory(result)
@@ -74,7 +75,7 @@ export default function SetupWizard({ onConfigured }: { onConfigured: () => void
     setError('')
     setMessage('')
     try {
-      const result = await api.testSetup(draft)
+      const result = await api.testSetup(currentDraft)
       setMessage(`Conexión OIDC correcta: ${result.issuer || 'servidor encontrado'}`)
     } catch (e: any) {
       setError(e.message)
@@ -86,7 +87,7 @@ export default function SetupWizard({ onConfigured }: { onConfigured: () => void
     setMessage('')
     setBusy(true)
     try {
-      const result = await api.discoverSetup(draft, ctrlUser, ctrlPassword, workplaceId)
+      const result = await api.discoverSetup(currentDraft, ctrlUser, ctrlPassword, workplaceId)
       applyInventory(result, workplaceId)
     } catch (e: any) {
       setError(e.message)
@@ -103,7 +104,7 @@ export default function SetupWizard({ onConfigured }: { onConfigured: () => void
 
   async function checkLocalVnc() {
     try {
-      const result = await api.localDiagnostics(draft)
+      const result = await api.localDiagnostics(currentDraft)
       setLocalHealth(result)
       if (result.vnc?.reachable) setMessage(`VNC local correcto: ${result.vnc.banner || 'RFB disponible'}`)
       else setError(`VNC no responde en ${renderer.vnc_host || '127.0.0.1'}:${renderer.vnc_port || 5900}. Ejecuta el instalador VNC recomendado.`)
@@ -121,7 +122,7 @@ export default function SetupWizard({ onConfigured }: { onConfigured: () => void
       return
     }
     try {
-      await api.saveSetup(draft)
+      await api.saveSetup(currentDraft)
       setCtrlPassword('')
       onConfigured()
     } catch (e: any) {
@@ -147,15 +148,15 @@ export default function SetupWizard({ onConfigured }: { onConfigured: () => void
         <section>
           <h3>1. Servidor CTRL</h3>
           <label>Dirección CTRL
-            <input value={draft.barco.base_url} onChange={e => setDraft({ ...draft, barco: { ...draft.barco, base_url: e.target.value } })} placeholder="https://192.168.68.200"/>
+            <input value={currentDraft.barco.base_url} onChange={e => setDraft({ ...currentDraft, barco: { ...currentDraft.barco, base_url: e.target.value } })} placeholder="https://192.168.68.200"/>
           </label>
           <div className="split">
-            <label>API base<input value={draft.barco.api_base} onChange={e => setDraft({ ...draft, barco: { ...draft.barco, api_base: e.target.value } })}/></label>
-            <label>Realm OIDC<input value={draft.barco.oidc.realm} onChange={e => setDraft({ ...draft, barco: { ...draft.barco, oidc: { ...draft.barco.oidc, realm: e.target.value } } })}/></label>
+            <label>API base<input value={currentDraft.barco.api_base} onChange={e => setDraft({ ...currentDraft, barco: { ...currentDraft.barco, api_base: e.target.value } })}/></label>
+            <label>Realm OIDC<input value={currentDraft.barco.oidc.realm} onChange={e => setDraft({ ...currentDraft, barco: { ...currentDraft.barco, oidc: { ...currentDraft.barco.oidc, realm: e.target.value } } })}/></label>
           </div>
           <div className="split">
-            <label>Client ID<input value={draft.barco.oidc.client_id} onChange={e => setDraft({ ...draft, barco: { ...draft.barco, oidc: { ...draft.barco.oidc, client_id: e.target.value } } })}/></label>
-            <label className="check setupCheck"><input type="checkbox" checked={draft.barco.tls.verify_tls} onChange={e => setDraft({ ...draft, barco: { ...draft.barco, tls: { verify_tls: e.target.checked } } })}/>Validar certificado TLS</label>
+            <label>Client ID<input value={currentDraft.barco.oidc.client_id} onChange={e => setDraft({ ...currentDraft, barco: { ...currentDraft.barco, oidc: { ...currentDraft.barco.oidc, client_id: e.target.value } } })}/></label>
+            <label className="check setupCheck"><input type="checkbox" checked={currentDraft.barco.tls.verify_tls} onChange={e => setDraft({ ...currentDraft, barco: { ...currentDraft.barco, tls: { verify_tls: e.target.checked } } })}/>Validar certificado TLS</label>
           </div>
           <div className="split">
             <label>Usuario CTRL<input value={ctrlUser} onChange={e => setCtrlUser(e.target.value)} autoComplete="username" placeholder="Solo para detectar"/></label>
@@ -209,7 +210,7 @@ export default function SetupWizard({ onConfigured }: { onConfigured: () => void
 
         <section>
           <h3>5. Servicio local</h3>
-          <div className="split"><label>Host<input value={draft.server.host} onChange={e => setDraft({ ...draft, server: { ...draft.server, host: e.target.value } })}/></label><label>Puerto<input type="number" value={draft.server.port} onChange={e => setDraft({ ...draft, server: { ...draft.server, port: Number(e.target.value) } })}/></label></div>
+          <div className="split"><label>Host<input value={currentDraft.server.host} onChange={e => setDraft({ ...currentDraft, server: { ...currentDraft.server, host: e.target.value } })}/></label><label>Puerto<input type="number" value={currentDraft.server.port} onChange={e => setDraft({ ...currentDraft, server: { ...currentDraft.server, port: Number(e.target.value) } })}/></label></div>
           <p className="help">Cambiar host o puerto requiere reiniciar Barco Controller después de guardar.</p>
         </section>
       </div>
