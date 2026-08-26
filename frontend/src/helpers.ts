@@ -30,6 +30,8 @@ export const defaultRenderer = (): RendererConfig => ({
   name: 'Renderer principal',
   barco_source_id: '',
   barco_source_label: 'Renderer web local',
+  vnc_host: '127.0.0.1',
+  vnc_port: 5900,
   browser_path: '',
   launch_mode: 'kiosk',
   startup_delay_sec: 1.5,
