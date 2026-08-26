@@ -44,6 +44,8 @@ renderers:
     name: Renderer principal
     barco_source_id: CHANGE_TO_VNC_SOURCE_ID
     barco_source_label: Renderer web local
+    vnc_host: 127.0.0.1
+    vnc_port: 5900
     browser_path: ""
     launch_mode: kiosk
     startup_delay_sec: 1.5
