@@ -12,7 +12,7 @@ on:
       - 'frontend/**'
       - 'packaging/**'
       - 'scripts/**'
-      - 'tools/**'
+      - 'tools/installer_builder.py'
       - 'build_windows.ps1'
       - '.github/workflows/windows-installer.yml'
   pull_request:
@@ -21,9 +21,12 @@ on:
       - 'frontend/**'
       - 'packaging/**'
       - 'scripts/**'
-      - 'tools/**'
+      - 'tools/installer_builder.py'
       - 'build_windows.ps1'
       - '.github/workflows/windows-installer.yml'
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -100,3 +103,20 @@ jobs:
           name: BarcoController-Builder
           path: builder_output/BarcoController-Builder.exe
           if-no-files-found: error
+
+      - name: Publish Builder.exe to repository
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path tools\bin | Out-Null
+          Copy-Item builder_output\BarcoController-Builder.exe tools\bin\BarcoController-Builder.exe -Force
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tools/bin/BarcoController-Builder.exe
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Builder.exe ya está actualizado en el repositorio."
+          } else {
+            git commit -m "build: publish BarcoController-Builder.exe [skip ci]"
+            git push origin HEAD:main
+          }
