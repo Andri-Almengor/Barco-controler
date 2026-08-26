@@ -61,9 +61,31 @@ Esto permite que un usuario estándar cambie recorridos, cámaras y configuraci�
 
 Se ejecuta en la sesión interactiva del usuario porque el renderer de páginas web debe estar visible en la misma sesión que captura VNC.
 
+## Builder.exe para generar el instalador
+
+Para desarrollo existe un ejecutable gráfico separado:
+
+```text
+BarcoController-Builder.exe
+        ↓
+Seleccionar carpeta Barco-controler
+        ↓
+Comprobar herramientas
+        ↓
+Generar instalador
+        ↓
+installer_output\BarcoController-Setup.exe
+```
+
+El Builder evita tener que recordar comandos. Muestra el proceso en una ventana, detecta Python, Node/npm, Inno Setup y PowerShell, y puede instalar las herramientas faltantes mediante WinGet. También permite omitir las pruebas backend cuando se necesita una compilación rápida.
+
+`Builder.exe` es una herramienta para quien desarrolla/compila el proyecto; el usuario final solo necesita `BarcoController-Setup.exe`.
+
+El código fuente del Builder está en `tools/installer_builder.py` y GitHub Actions publica `BarcoController-Builder.exe` como artifact independiente.
+
 ## Construir el Setup.exe
 
-Para desarrollo existe:
+También se puede ejecutar directamente:
 
 ```powershell
 .\build_windows.ps1
@@ -71,7 +93,7 @@ Para desarrollo existe:
 
 El script compila React, ejecuta las pruebas, congela Python con PyInstaller y genera `installer_output\BarcoController-Setup.exe` mediante Inno Setup.
 
-También existe `.github/workflows/windows-installer.yml`, que construye el instalador automáticamente en un runner Windows y publica `BarcoController-Setup.exe` como artifact de GitHub Actions.
+`.github/workflows/windows-installer.yml` construye automáticamente tanto `BarcoController-Setup.exe` como `BarcoController-Builder.exe` en un runner Windows.
 
 ## Interfaz CTRL-style
 
