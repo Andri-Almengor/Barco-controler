@@ -3,8 +3,17 @@ name: Build Windows Installer
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'packaging/**'
+      - 'scripts/**'
+      - 'build_windows.ps1'
+      - '.github/workflows/windows-installer.yml'
   pull_request:
     paths:
       - 'backend/**'
