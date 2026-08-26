@@ -1,7 +1,8 @@
 import type { CameraRule, RendererConfig } from './api'
 
 export const labelOf = (value: any) => String(value?.name || value?.title || value?.label || value?.id || value?._id || 'Sin nombre')
-export const idOf = (value: any) => String(value?.id || value?._id || '')
+export const idOf = (value: any) => String(value?.id || value?._id || value?.workplaceId || value?.sourceId || value?.uuid || '')
+export const looksLikeVnc = (value: any) => JSON.stringify(value || {}).toLowerCase().includes('vnc')
 export const fmt = (ts?: number) => ts ? new Date(ts * 1000).toLocaleTimeString() : '—'
 
 export const emptyCamera = (workplaceId = ''): CameraRule => ({

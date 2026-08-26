@@ -32,6 +32,7 @@ export type SystemConfig = {
   renderers: RendererConfig[]
 }
 export type SetupStatus = { configured: boolean; configError?: string | null; remoteSetupEnabled?: boolean }
+export type DiscoveryResult = { ok: boolean; authMode: 'temporary' | 'existing-session'; selectedWorkplaceId: string; workplaces: any[]; sources: any[]; compositions: any[]; warnings: string[] }
 export type RendererStatus = { active: Array<{ rendererId: string; sourceId: string; sourceName: string; sourceType: string; url: string; pid: number; running: boolean; startedAt: number; barcoSourceId: string }>; detectedBrowsers: Array<{ name: string; path: string }> }
 
 async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
@@ -53,6 +54,7 @@ export const api = {
   setupConfig: () => request<SystemConfig>('/api/setup/config'),
   setupBrowsers: () => request<Array<{ name: string; path: string }>>('/api/setup/browsers'),
   testSetup: (config: SystemConfig) => request<{ ok: boolean; issuer?: string; tokenEndpoint?: string }>('/api/setup/test', { method: 'POST', body: JSON.stringify({ config }) }),
+  discoverSetup: (config: SystemConfig, username = '', password = '', workplaceId = '') => request<DiscoveryResult>('/api/setup/discover', { method: 'POST', body: JSON.stringify({ config, username, password, workplaceId }) }),
   saveSetup: (config: SystemConfig) => request<{ ok: boolean; config: SystemConfig; restartRequiredForServerBinding: boolean }>('/api/setup/config', { method: 'POST', body: JSON.stringify({ config }) }),
 
   authStatus: () => request<{ configured?: boolean; authenticated: boolean; accessValid: boolean; expiresAt: number | null }>('/api/status'),

@@ -1,4 +1,5 @@
 operate:
+  list_workplaces: /operate/v3/workplaces
   list_sources: /operate/v3/sources
   list_compositions: /operate/v3/compositions
   get_workplace_content: /operate/v3/workplaces/{workplaceId}/content

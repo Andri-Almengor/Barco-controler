@@ -5,9 +5,19 @@ from typing import Any
 import requests
 from flask import Blueprint, jsonify, request
 
-from ..config import load_config_or_default, safe_public_config, save_config
+from ..config import (
+    getenv,
+    load_config_or_default,
+    load_endpoints,
+    normalize_config,
+    safe_public_config,
+    save_config,
+)
 from ..security import setup_access_allowed
+from ..services.ctrl_api import CtrlApiClient
 from ..services.external_sources import ExternalRendererService
+from ..services.oidc import OIDCSession
+from ..services.workplace import WorkplaceController
 
 
 def _issuer_from(cfg: dict[str, Any]) -> tuple[str, bool, int]:
@@ -19,6 +29,41 @@ def _issuer_from(cfg: dict[str, Any]) -> tuple[str, bool, int]:
     verify = bool((barco.get("tls") or {}).get("verify_tls", True))
     timeout = max(3, min(30, int(barco.get("request_timeout_sec") or 15)))
     return f"{base}/auth/realms/{realm}", verify, timeout
+
+
+def _id_of(value: dict[str, Any] | None) -> str:
+    if not isinstance(value, dict):
+        return ""
+    for key in ("id", "_id", "workplaceId", "sourceId", "uuid"):
+        candidate = value.get(key)
+        if candidate not in (None, ""):
+            return str(candidate)
+    return ""
+
+
+def _temporary_workplace(cfg: dict[str, Any], username: str, password: str) -> tuple[WorkplaceController, OIDCSession]:
+    cfg = normalize_config(cfg)
+    if not username or not password:
+        raise ValueError("Usuario y contraseña CTRL son requeridos para la detección inicial")
+    issuer, verify, timeout = _issuer_from(cfg)
+    barco = cfg.get("barco") or {}
+    oidc_cfg = barco.get("oidc") or {}
+    oidc = OIDCSession(
+        issuer,
+        str(oidc_cfg.get("client_id") or "proxima"),
+        getenv(str(oidc_cfg.get("client_secret_env") or "")),
+        verify,
+        timeout=timeout,
+    )
+    oidc.login_password_grant(username, password)
+    ctrl = CtrlApiClient(
+        str(barco.get("base_url") or "").rstrip("/"),
+        str(barco.get("api_base") or "/api"),
+        oidc,
+        verify,
+        timeout=timeout,
+    )
+    return WorkplaceController(cfg, load_endpoints(), ctrl), oidc
 
 
 def create_setup_blueprint(state):
@@ -68,6 +113,77 @@ def create_setup_blueprint(state):
             })
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc)}), 502
+
+    @bp.post("/setup/discover")
+    def discover_ctrl_inventory():
+        """Discover workplaces and sources without persisting operator credentials.
+
+        During first setup the request includes temporary CTRL credentials. Once the
+        application is configured, an already-authenticated operator can omit them and
+        reuse the current CTRL session.
+        """
+        if not setup_access_allowed(state):
+            return deny()
+        body = request.get_json(silent=True) or {}
+        cfg = body.get("config") if isinstance(body.get("config"), dict) else load_config_or_default()
+        username = str(body.get("username") or "").strip()
+        password = str(body.get("password") or "")
+        requested_workplace_id = str(body.get("workplaceId") or "").strip()
+
+        temporary_oidc: OIDCSession | None = None
+        try:
+            if state.configured and not username and not password:
+                workplace_service = state.workplace
+                auth_mode = "existing-session"
+            else:
+                workplace_service, temporary_oidc = _temporary_workplace(cfg, username, password)
+                auth_mode = "temporary"
+
+            warnings: list[str] = []
+            try:
+                workplaces = workplace_service.list_workplaces()
+            except Exception as exc:
+                workplaces = []
+                warnings.append(f"No se pudieron enumerar workplaces: {exc}")
+
+            selected_id = requested_workplace_id
+            if not selected_id:
+                configured_workplaces = (normalize_config(cfg).get("workplaces") or [])
+                if configured_workplaces:
+                    selected_id = str(configured_workplaces[0].get("id") or "")
+            if not selected_id and workplaces:
+                selected_id = _id_of(workplaces[0])
+
+            try:
+                sources = workplace_service.list_sources(selected_id) if selected_id else []
+            except Exception as exc:
+                sources = []
+                warnings.append(f"No se pudieron enumerar fuentes: {exc}")
+
+            try:
+                compositions = workplace_service.list_compositions()
+            except Exception as exc:
+                compositions = []
+                warnings.append(f"No se pudieron enumerar composiciones: {exc}")
+
+            if not workplaces and not sources and not compositions:
+                detail = "; ".join(warnings) or "CTRL no devolvió inventario"
+                return jsonify({"ok": False, "error": detail}), 502
+
+            return jsonify({
+                "ok": True,
+                "authMode": auth_mode,
+                "selectedWorkplaceId": selected_id,
+                "workplaces": workplaces,
+                "sources": sources,
+                "compositions": compositions,
+                "warnings": warnings,
+            })
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 502
+        finally:
+            if temporary_oidc is not None:
+                temporary_oidc.logout()
 
     @bp.post("/setup/config")
     def set_config():

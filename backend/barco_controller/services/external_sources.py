@@ -85,7 +85,7 @@ class ExternalRendererService:
     def _target_url(self, source: dict[str, Any], local_origin: str) -> str:
         if source.get("type") == "web":
             return str(source["url"])
-        return f"{local_origin.rstrip('/')}/renderer/{quote(str(source['id']))}"
+        return f"{local_origin.rstrip('/')}/api/renderer/{quote(str(source['id']))}"
 
     def _args(self, browser: str, renderer: dict[str, Any], target_url: str) -> list[str]:
         args = [browser, "--no-first-run", "--no-default-browser-check", f"--user-data-dir={self._profile_path(renderer)}"]

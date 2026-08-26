@@ -98,20 +98,25 @@ class WorkplaceController:
         endpoint = self.endpoints["operate"]["get_workplace_content"].format(workplaceId=workplace_id)
         return self.api.request("GET", endpoint)
 
+    def list_workplaces(self) -> list[dict[str, Any]]:
+        endpoint = self.endpoints["operate"].get("list_workplaces", "/operate/v3/workplaces")
+        return self._unwrap(self.api.request("GET", endpoint))
+
     def list_compositions(self) -> list[dict[str, Any]]:
         endpoint = self.endpoints["operate"]["list_compositions"]
         return self._unwrap(self.api.request("GET", endpoint))
 
-    def list_sources(self, workplace_id: str) -> list[dict[str, Any]]:
+    def list_sources(self, workplace_id: str | None = None) -> list[dict[str, Any]]:
         endpoint = self.endpoints["operate"]["list_sources"]
-        return self._unwrap(self.api.request("GET", endpoint, params={"workplaceId": workplace_id}))
+        params = {"workplaceId": workplace_id} if workplace_id else None
+        return self._unwrap(self.api.request("GET", endpoint, params=params))
 
     @staticmethod
     def _unwrap(value: Any) -> list[dict[str, Any]]:
         if isinstance(value, list):
             return value
         if isinstance(value, dict):
-            for key in ("data", "items", "results"):
+            for key in ("data", "items", "results", "value", "workplaces", "sources", "compositions"):
                 if isinstance(value.get(key), list):
                     return value[key]
         return []
