@@ -1,0 +1,6 @@
+operate:
+  list_sources: /operate/v3/sources
+  list_compositions: /operate/v3/compositions
+  get_workplace_content: /operate/v3/workplaces/{workplaceId}/content
+  set_workplace_content: /operate/v3/workplaces/{workplaceId}/content
+  clear_workplace_content: /operate/v3/workplaces/{workplaceId}/content

@@ -1,0 +1,38 @@
+server:
+  host: 127.0.0.1
+  port: 8080
+  cors_origins: []
+  trust_proxy: false
+
+barco:
+  base_url: https://CTRL-IP-OR-HOSTNAME
+  api_base: /api
+  oidc:
+    realm: OCS
+    client_id: proxima
+    client_secret_env: CTRL_CLIENT_SECRET
+  tls:
+    verify_tls: true
+  request_timeout_sec: 30
+  pre_clear_delay_ms: 600
+
+workplaces:
+  - name: Wall principal
+    id: CHANGE_ME
+    geometry:
+      type: px
+      x: 0
+      y: 0
+      width: 3840
+      height: 2160
+
+routes:
+  default_interval_sec: 30
+  minimum_interval_sec: 3
+
+cameras:
+  reconnect_delay_sec: 2
+  default_duration_sec: 15
+  default_cooldown_sec: 20
+  frame_width: 640
+  frame_height: 360
