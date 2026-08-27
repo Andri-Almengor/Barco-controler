@@ -1,5 +1,5 @@
 #define MyAppName "Barco Controller"
-#define MyAppVersion "0.5.0"
+#define MyAppVersion "0.5.1"
 #define MyAppPublisher "Andri-Almengor"
 #define MyAppExeName "BarcoController.exe"
 
@@ -9,7 +9,7 @@
 AppId={{25DF5D40-59C9-4DFD-8C2B-52E1F7EA77B0}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
-VersionInfoVersion=0.5.0.0
+VersionInfoVersion=0.5.1.0
 AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\Barco Controller
 DefaultGroupName=Barco Controller
@@ -23,13 +23,14 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
-; Upgrade behavior: reuse the previous installation and let Windows Restart
-; Manager close the running desktop process before files are replaced.
+; Upgrade behavior: keep the same application identity/folder/tasks and close
+; the previous desktop process before replacing the PyInstaller bundle.
 UsePreviousAppDir=yes
 UsePreviousGroup=yes
 UsePreviousTasks=yes
 DirExistsWarning=no
 CloseApplications=yes
+CloseApplicationsFilter={#MyAppExeName}
 RestartApplications=no
 RestartIfNeededByRun=no
 SetupLogging=yes
@@ -66,4 +67,29 @@ Type: filesandordirs; Name: "{app}\scripts"
 function InitializeSetup(): Boolean;
 begin
   Result := True;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+  TaskKillPath: String;
+begin
+  Result := '';
+  TaskKillPath := ExpandConstant('{sys}\taskkill.exe');
+
+  ; During an in-place upgrade the old tray process can keep the single-instance
+  ; mutex alive for a short time even after its HTTP listener has stopped. Stop
+  ; the complete process tree explicitly before old binaries are removed.
+  if FileExists(TaskKillPath) then
+  begin
+    Exec(
+      TaskKillPath,
+      '/IM "{#MyAppExeName}" /T /F',
+      '',
+      SW_HIDE,
+      ewWaitUntilTerminated,
+      ResultCode
+    );
+    Sleep(1200);
+  end;
 end;
