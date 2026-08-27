@@ -4,6 +4,7 @@ import App from './AppNext'
 import './styles/stitch.css'
 import './styles/stitch-exact.css'
 import './styles/visual-editor.css'
+import './styles/wall-settings-v2.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode><App /></React.StrictMode>,
