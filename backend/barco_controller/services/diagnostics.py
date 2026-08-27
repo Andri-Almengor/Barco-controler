@@ -30,6 +30,24 @@ class DiagnosticsService:
         return dict(renderers[0]) if renderers else {}
 
     @staticmethod
+    def _hidden_process_kwargs() -> dict[str, Any]:
+        """Keep helper console programs completely invisible in the GUI build.
+
+        Diagnostics runs periodically from the frontend. Windows console helpers
+        such as sc.exe would otherwise create a visible console window for a
+        fraction of a second on every health refresh.
+        """
+        if os.name != "nt":
+            return {}
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = subprocess.SW_HIDE
+        return {
+            "startupinfo": startupinfo,
+            "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        }
+
+    @staticmethod
     def _find_windows_vnc() -> dict[str, Any]:
         result: dict[str, Any] = {
             "platform": platform.system(),
@@ -57,6 +75,7 @@ class DiagnosticsService:
                         text=True,
                         timeout=2,
                         check=False,
+                        **DiagnosticsService._hidden_process_kwargs(),
                     )
                     output = (proc.stdout or "") + (proc.stderr or "")
                     result["serviceRunning"] = "RUNNING" in output
