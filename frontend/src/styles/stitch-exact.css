@@ -1,0 +1,48 @@
+/* Exact design-token overrides from the uploaded Red Sector Control DESIGN.md. */
+body, button, input, select, textarea,
+.bc-app, .bc-login-page, .bc-setup-page,
+.bc-app *:not(.material-symbols-outlined),
+.bc-login-page *:not(.material-symbols-outlined),
+.bc-setup-page *:not(.material-symbols-outlined) {
+  font-family: Inter, "Segoe UI", system-ui, sans-serif !important;
+}
+
+pre, code,
+.bc-log-row > span:first-child,
+.system-terminal pre,
+.composition-ruler,
+.source-detail dd {
+  font-family: "JetBrains Mono", Consolas, monospace !important;
+}
+
+body {
+  background: #131314;
+  color: #F5F5F5;
+}
+
+.bc-main {
+  background: #131314;
+}
+
+.bc-btn,
+input,
+select,
+textarea,
+.bc-top-button,
+.bc-workplace-select,
+.bc-search,
+.bc-toast {
+  border-radius: 8px;
+}
+
+.bc-panel,
+.bc-operational-banner,
+.bc-status-card,
+.wall-tile,
+.composition-canvas,
+.camera-preview,
+.system-terminal,
+.bc-log-table {
+  border-radius: 0;
+  box-shadow: none;
+}
