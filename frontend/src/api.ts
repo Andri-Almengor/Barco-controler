@@ -2,7 +2,7 @@ export type RouteKind = 'composition' | 'source' | 'external'
 export type RouteItem = { kind: RouteKind; id: string; label?: string }
 export type Route = { id: string; name: string; intervalSec: number; workplaceId: string; items: RouteItem[]; updatedAt?: number }
 export type Geometry = { type: string; x: number; y: number; width: number; height: number }
-export type Workplace = { id: string; name: string; geometry?: Geometry }
+export type Workplace = { id: string; name: string; role?: 'primary' | 'secondary'; geometry?: Geometry }
 export type RouteRuntime = { routeId: string; routeName?: string; state: 'stopped' | 'running' | 'paused' | 'error'; index: number; lastError?: string | null; lastItem?: any; nextRunAt?: number | null }
 export type CameraRule = {
   id?: string; name: string; enabled: boolean; rtspUrl?: string; username?: string; password?: string; hasPassword?: boolean;
@@ -78,6 +78,7 @@ export const api = {
   workplaces: () => request<Workplace[]>('/api/workplaces'),
   compositions: () => request<any[]>('/api/compositions'),
   sources: (workplaceId: string) => request<any[]>(`/api/sources?workplaceId=${encodeURIComponent(workplaceId)}`),
+  workplaceContent: (workplaceId: string) => request<any>(`/api/workplace/content?workplaceId=${encodeURIComponent(workplaceId)}`),
   applyItem: (workplaceId: string, item: RouteItem) => request('/api/workplace/apply', { method: 'POST', body: JSON.stringify({ workplaceId, ...item }) }),
   clear: (workplaceId: string) => request('/api/workplace/clear?workplaceId=' + encodeURIComponent(workplaceId), { method: 'DELETE' }),
 
