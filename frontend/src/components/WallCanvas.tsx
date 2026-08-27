@@ -1,4 +1,4 @@
-import { useRef, type PointerEvent as ReactPointerEvent } from 'react'
+import { useRef, type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import type { Geometry, LayoutItem, LayoutKind } from '../api'
 
 export type WallPalettePayload = {
@@ -24,7 +24,7 @@ type WallCanvasProps = {
 
 const MIME = 'application/x-barco-layout-item'
 
-export function beginPaletteDrag(event: React.DragEvent, payload: WallPalettePayload) {
+export function beginPaletteDrag(event: ReactDragEvent, payload: WallPalettePayload) {
   event.dataTransfer.effectAllowed = 'copy'
   event.dataTransfer.setData(MIME, JSON.stringify(payload))
   event.dataTransfer.setData('text/plain', payload.label)
@@ -129,7 +129,7 @@ export function WallCanvas(props: WallCanvasProps) {
     window.addEventListener('pointerup', onUp, { once: true })
   }
 
-  function handleDrop(event: React.DragEvent) {
+  function handleDrop(event: ReactDragEvent) {
     if (!editable || !props.onDropNew || !containerRef.current) return
     event.preventDefault()
     const raw = event.dataTransfer.getData(MIME)
