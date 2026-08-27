@@ -13,6 +13,7 @@ from ..config import (
     safe_public_config,
     save_config,
 )
+from ..paths import CONFIG_PATH
 from ..security import setup_access_allowed
 from ..services.ctrl_api import CtrlApiClient
 from ..services.external_sources import ExternalRendererService
@@ -192,14 +193,21 @@ def create_setup_blueprint(state):
         body = request.get_json(silent=True) or {}
         cfg = body.get("config") if isinstance(body.get("config"), dict) else body
         previous = load_config_or_default()
+        previous_was_configured = bool((previous.get("barco") or {}).get("base_url"))
         try:
             saved = save_config(cfg)
             try:
                 state.reload()
             except Exception as reload_exc:
                 # Never leave a broken configuration persisted. Restore the last
-                # known-good file and runtime before returning the error.
-                save_config(previous)
+                # known-good file, or remove the failed first-run file entirely.
+                if previous_was_configured:
+                    save_config(previous)
+                else:
+                    try:
+                        CONFIG_PATH.unlink(missing_ok=True)
+                    except Exception:
+                        pass
                 state.reload(silent=True)
                 raise RuntimeError(
                     f"La nueva configuración no pudo cargarse y se restauró la anterior: {reload_exc}"
