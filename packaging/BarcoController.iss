@@ -77,9 +77,9 @@ begin
   Result := '';
   TaskKillPath := ExpandConstant('{sys}\taskkill.exe');
 
-  ; During an in-place upgrade the old tray process can keep the single-instance
-  ; mutex alive for a short time even after its HTTP listener has stopped. Stop
-  ; the complete process tree explicitly before old binaries are removed.
+  // During an in-place upgrade the old tray process can keep the single-instance
+  // mutex alive for a short time even after its HTTP listener has stopped. Stop
+  // the complete process tree explicitly before old binaries are removed.
   if FileExists(TaskKillPath) then
   begin
     Exec(
