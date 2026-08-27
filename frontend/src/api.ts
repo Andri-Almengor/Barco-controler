@@ -14,6 +14,9 @@ export type CameraStatus = { running: boolean; opencvAvailable: boolean; activeE
 export type LogEntry = { ts: number; level: string; message: string }
 export type ExternalType = 'web' | 'image' | 'video'
 export type ExternalSource = { id?: string; name: string; type: ExternalType; url: string; rendererId: string; enabled: boolean; updatedAt?: number }
+export type LayoutKind = 'source' | 'composition' | 'external'
+export type LayoutItem = { kind: LayoutKind; id: string; label?: string; geometry: Geometry }
+export type MixedLayout = { id?: string; name: string; workplaceId: string; items: LayoutItem[]; updatedAt?: number }
 export type RendererConfig = {
   id: string; name: string; barco_source_id: string; barco_source_label: string; vnc_host: string; vnc_port: number; browser_path: string;
   launch_mode: 'kiosk' | 'app' | 'fullscreen'; startup_delay_sec: number; profile_dir: string; extra_args: string[]
@@ -42,7 +45,7 @@ export type LocalDiagnostics = {
   time: number; platform: string; vnc: Record<string, any>; browsers: Array<{ name: string; path: string }>;
   recommended: { vncHost: string; vncPort: number; windowsInstallCommand: string }
 }
-export type RendererStatus = { active: Array<{ rendererId: string; sourceId: string; sourceName: string; sourceType: string; url: string; pid: number; running: boolean; startedAt: number; barcoSourceId: string }>; detectedBrowsers: Array<{ name: string; path: string }> }
+export type RendererStatus = { active: Array<{ rendererId: string; sourceId: string; sourceName: string; sourceType: string; url: string; pid: number; running: boolean; startedAt: number; barcoSourceId: string; foregroundReady?: boolean }>; detectedBrowsers: Array<{ name: string; path: string }> }
 
 async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(url, {
@@ -95,6 +98,11 @@ export const api = {
   showExternalSource: (id: string, workplaceId: string) => request('/api/external-sources/' + encodeURIComponent(id) + '/show', { method: 'POST', body: JSON.stringify({ workplaceId }) }),
   rendererStatus: () => request<RendererStatus>('/api/external-renderer/status'),
   stopRenderer: (id: string) => request('/api/external-renderer/' + encodeURIComponent(id) + '/stop', { method: 'POST' }),
+
+  layouts: () => request<MixedLayout[]>('/api/layouts'),
+  saveLayout: (layout: MixedLayout) => request<{ ok: boolean; layout: MixedLayout }>('/api/layouts', { method: 'POST', body: JSON.stringify(layout) }),
+  deleteLayout: (id: string) => request('/api/layouts/' + encodeURIComponent(id), { method: 'DELETE' }),
+  showLayout: (id: string, workplaceId: string) => request<{ ok: boolean; items: number }>('/api/layouts/' + encodeURIComponent(id) + '/show', { method: 'POST', body: JSON.stringify({ workplaceId }) }),
 
   cameraRules: () => request<CameraRule[]>('/api/camera-rules'),
   saveCameraRule: (rule: CameraRule) => request<{ ok: boolean; rule: CameraRule }>('/api/camera-rules', { method: 'POST', body: JSON.stringify(rule) }),
