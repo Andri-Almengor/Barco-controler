@@ -148,7 +148,7 @@ def create_setup_blueprint(state):
 
             selected_id = requested_workplace_id
             if not selected_id:
-                configured_workplaces = (normalize_config(cfg).get("workplaces") or [])
+                configured_workplaces = normalize_config(cfg).get("workplaces") or []
                 if configured_workplaces:
                     selected_id = str(configured_workplaces[0].get("id") or "")
             if not selected_id and workplaces:
@@ -191,10 +191,27 @@ def create_setup_blueprint(state):
             return deny()
         body = request.get_json(silent=True) or {}
         cfg = body.get("config") if isinstance(body.get("config"), dict) else body
+        previous = load_config_or_default()
         try:
             saved = save_config(cfg)
-            state.reload()
-            return jsonify({"ok": True, "config": safe_public_config(saved), "restartRequiredForServerBinding": True})
+            try:
+                state.reload()
+            except Exception as reload_exc:
+                # Never leave a broken configuration persisted. Restore the last
+                # known-good file and runtime before returning the error.
+                save_config(previous)
+                state.reload(silent=True)
+                raise RuntimeError(
+                    f"La nueva configuración no pudo cargarse y se restauró la anterior: {reload_exc}"
+                ) from reload_exc
+            return jsonify({
+                "ok": True,
+                "config": safe_public_config(saved),
+                "restartRequiredForServerBinding": (
+                    (previous.get("server") or {}).get("host") != (saved.get("server") or {}).get("host")
+                    or (previous.get("server") or {}).get("port") != (saved.get("server") or {}).get("port")
+                ),
+            })
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
 
