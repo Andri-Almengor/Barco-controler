@@ -16,11 +16,18 @@ class WallItem:
     label: str = ""
 
 
+@dataclass(frozen=True)
+class WallPlacement:
+    item: WallItem
+    geometry: dict[str, Any]
+
+
 class WorkplaceController:
     """Single writer for Barco workplaces.
 
     Every wall mutation passes through this class. A per-workplace RLock makes
-    route steps, manual operations and camera interruptions mutually exclusive.
+    route steps, manual operations, mixed layouts and camera interruptions
+    mutually exclusive.
     """
 
     def __init__(self, cfg: dict[str, Any], endpoints: dict[str, Any], api: CtrlApiClient):
@@ -67,9 +74,37 @@ class WorkplaceController:
         with self._owners_guard:
             return self._owners.get(workplace_id)
 
-    def _payload(self, workplace_id: str, item: WallItem) -> list[dict[str, Any]]:
+    @staticmethod
+    def _content(item: WallItem) -> dict[str, str]:
         content_type = "Source" if item.kind.lower() == "source" else "Composition"
-        return [{"geometry": self.geometry_for(workplace_id), "content": {"type": content_type, "id": item.id}}]
+        return {"type": content_type, "id": item.id}
+
+    def _payload(self, workplace_id: str, item: WallItem) -> list[dict[str, Any]]:
+        return [{"geometry": self.geometry_for(workplace_id), "content": self._content(item)}]
+
+    @staticmethod
+    def _layout_payload(placements: list[WallPlacement]) -> list[dict[str, Any]]:
+        payload: list[dict[str, Any]] = []
+        for placement in placements:
+            if not placement.item.id:
+                raise ValueError("Uno de los elementos del layout no tiene id")
+            geometry = dict(placement.geometry or {})
+            payload.append({
+                "geometry": {
+                    "type": str(geometry.get("type") or "px"),
+                    "x": int(geometry.get("x") or 0),
+                    "y": int(geometry.get("y") or 0),
+                    "width": max(1, int(geometry.get("width") or 1)),
+                    "height": max(1, int(geometry.get("height") or 1)),
+                },
+                "content": WorkplaceController._content(placement.item),
+            })
+        return payload
+
+    def _pre_clear_delay(self) -> None:
+        delay_ms = int(((self.cfg.get("barco") or {}).get("pre_clear_delay_ms") or 600))
+        if delay_ms > 0:
+            time.sleep(delay_ms / 1000)
 
     def clear_locked(self, workplace_id: str) -> None:
         endpoint = self.endpoints["operate"]["clear_workplace_content"].format(workplaceId=workplace_id)
@@ -80,15 +115,26 @@ class WorkplaceController:
             raise ValueError("El contenido no tiene id")
         if pre_clear:
             self.clear_locked(workplace_id)
-            delay_ms = int(((self.cfg.get("barco") or {}).get("pre_clear_delay_ms") or 600))
-            if delay_ms > 0:
-                time.sleep(delay_ms / 1000)
+            self._pre_clear_delay()
         endpoint = self.endpoints["operate"]["set_workplace_content"].format(workplaceId=workplace_id)
         self.api.request("PUT", endpoint, json_body=self._payload(workplace_id, item))
+
+    def apply_layout_locked(self, workplace_id: str, placements: list[WallPlacement], *, pre_clear: bool = True) -> None:
+        if not placements:
+            raise ValueError("El layout no tiene elementos")
+        if pre_clear:
+            self.clear_locked(workplace_id)
+            self._pre_clear_delay()
+        endpoint = self.endpoints["operate"]["set_workplace_content"].format(workplaceId=workplace_id)
+        self.api.request("PUT", endpoint, json_body=self._layout_payload(placements))
 
     def apply(self, workplace_id: str, item: WallItem, owner: str = "manual") -> None:
         with self.exclusive(workplace_id, owner):
             self.apply_locked(workplace_id, item)
+
+    def apply_layout(self, workplace_id: str, placements: list[WallPlacement], owner: str = "layout") -> None:
+        with self.exclusive(workplace_id, owner):
+            self.apply_layout_locked(workplace_id, placements)
 
     def clear(self, workplace_id: str, owner: str = "manual") -> None:
         with self.exclusive(workplace_id, owner):
