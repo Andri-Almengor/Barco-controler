@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import socket
 import threading
 import time
 import traceback
@@ -18,6 +19,7 @@ from barco_controller.paths import LOG_DIR, ensure_runtime_dirs
 APP_TITLE = "Barco Controller"
 MUTEX_NAME = "Local\\BarcoControllerDesktop"
 ERROR_ALREADY_EXISTS = 183
+STARTUP_TIMEOUT_SEC = 60.0
 
 _MUTEX_HANDLE = None
 
@@ -44,13 +46,7 @@ def _close_mutex_handle() -> None:
 
 
 def _try_acquire_windows_mutex() -> bool:
-    """Try to own the single-instance mutex without trusting a stale instance.
-
-    During an in-place upgrade the old process can retain the mutex for a short
-    period after its HTTP server has already stopped. In that situation the new
-    process must wait and retry instead of opening a dead localhost URL and
-    exiting.
-    """
+    """Try to own the single-instance mutex without trusting a stale instance."""
     global _MUTEX_HANDLE
     if os.name != "nt":
         return True
@@ -71,45 +67,77 @@ def _try_acquire_windows_mutex() -> bool:
     return True
 
 
-def _ui_url(port: int) -> str:
-    return f"http://127.0.0.1:{port}"
+def _normalize_bind_host(value: str) -> str:
+    host = (value or "127.0.0.1").strip()
+    if host.lower() == "localhost":
+        return "127.0.0.1"
+    return host
 
 
-def _is_existing_instance(port: int) -> bool:
-    try:
-        response = requests.get(f"{_ui_url(port)}/api/health", timeout=0.8)
-        return response.ok
-    except Exception:
-        return False
+def _probe_hosts(bind_host: str) -> list[str]:
+    host = _normalize_bind_host(bind_host)
+    if host in {"0.0.0.0", "::", "[::]"}:
+        return ["127.0.0.1", "::1"]
+    hosts = [host]
+    if host not in {"127.0.0.1", "::1"}:
+        hosts.append("127.0.0.1")
+    return hosts
 
 
-def _wait_for_mutex_or_existing_instance(port: int, timeout_sec: float = 20.0) -> str:
-    """Return 'owned' when this process owns the mutex or 'existing' when a
-    healthy previous instance is serving HTTP.
+def _ui_url(host: str, port: int) -> str:
+    display_host = "127.0.0.1" if host in {"0.0.0.0", "::", "[::]"} else host
+    if ":" in display_host and not display_host.startswith("["):
+        display_host = f"[{display_host}]"
+    return f"http://{display_host}:{port}"
 
-    This explicitly handles the shutdown window produced by installer upgrades.
-    """
+
+def _is_existing_instance(bind_host: str, port: int) -> bool:
+    for host in _probe_hosts(bind_host):
+        try:
+            response = requests.get(f"{_ui_url(host, port)}/api/health", timeout=0.8)
+            if response.ok:
+                data = response.json() if "application/json" in (response.headers.get("content-type") or "") else {}
+                if isinstance(data, dict) and data.get("ok") is True:
+                    return True
+        except Exception:
+            continue
+    return False
+
+
+def _wait_for_mutex_or_existing_instance(bind_host: str, port: int, timeout_sec: float = 20.0) -> str:
     deadline = time.time() + timeout_sec
     while time.time() < deadline:
-        if _is_existing_instance(port):
+        if _is_existing_instance(bind_host, port):
             return "existing"
         if _try_acquire_windows_mutex():
             return "owned"
         time.sleep(0.35)
 
-    # One final health check avoids a false failure on a slow machine.
-    if _is_existing_instance(port):
+    if _is_existing_instance(bind_host, port):
         return "existing"
     return "timeout"
 
 
-def _wait_until_ready(port: int, timeout_sec: float = 20.0) -> bool:
+def _wait_until_ready(bind_host: str, port: int, server_error: list[BaseException], timeout_sec: float = STARTUP_TIMEOUT_SEC) -> bool:
     deadline = time.time() + timeout_sec
     while time.time() < deadline:
-        if _is_existing_instance(port):
+        if server_error:
+            return False
+        if _is_existing_instance(bind_host, port):
             return True
         time.sleep(0.2)
     return False
+
+
+def _port_in_use(host: str, port: int) -> bool:
+    target = "127.0.0.1" if host in {"0.0.0.0", "::", "[::]"} else host
+    family = socket.AF_INET6 if ":" in target else socket.AF_INET
+    try:
+        with socket.socket(family, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.4)
+            return sock.connect_ex((target, port)) == 0
+    except Exception:
+        return False
 
 
 def _tray_image() -> Image.Image:
@@ -122,15 +150,13 @@ def _tray_image() -> Image.Image:
     return image
 
 
-def _run_tray(server: Any, port: int) -> None:
+def _run_tray(server: Any, ui: str) -> None:
     try:
         import pystray
     except Exception as exc:
         _write_launcher_log(f"pystray no disponible; servidor permanece activo: {exc}")
         while True:
             time.sleep(3600)
-
-    ui = _ui_url(port)
 
     def open_ui(icon=None, item=None):
         webbrowser.open(ui, new=2)
@@ -159,13 +185,19 @@ def main() -> None:
     ensure_runtime_dirs()
     cfg = load_config_or_default()
     server_cfg = cfg.get("server") or {}
-    host = str(server_cfg.get("host") or "127.0.0.1")
-    port = int(server_cfg.get("port") or 8080)
-    ui = _ui_url(port)
+    host = _normalize_bind_host(str(server_cfg.get("host") or "127.0.0.1"))
+    try:
+        port = int(server_cfg.get("port") or 8080)
+    except Exception:
+        port = 8080
+    if port < 1 or port > 65535:
+        port = 8080
 
-    _write_launcher_log(f"Inicio solicitado. host={host} port={port}")
+    ui_host = _probe_hosts(host)[0]
+    ui = _ui_url(ui_host, port)
+    _write_launcher_log(f"Inicio solicitado. bind_host={host} port={port} ui={ui}")
 
-    instance_state = _wait_for_mutex_or_existing_instance(port)
+    instance_state = _wait_for_mutex_or_existing_instance(host, port)
     if instance_state == "existing":
         _write_launcher_log("Instancia saludable existente detectada; abriendo interfaz.")
         webbrowser.open(ui, new=2)
@@ -173,29 +205,54 @@ def main() -> None:
     if instance_state == "timeout":
         raise RuntimeError(
             "No se pudo iniciar Barco Controller: otra instancia conserva el bloqueo "
-            "pero no responde en el puerto local. Cierra BarcoController.exe desde el "
-            "Administrador de tareas y vuelve a abrir la aplicación."
+            "pero no responde. Cierra BarcoController.exe desde el Administrador de "
+            "tareas y vuelve a abrir la aplicación."
+        )
+
+    if _port_in_use(host, port) and not _is_existing_instance(host, port):
+        raise RuntimeError(
+            f"El puerto {port} ya está siendo usado por otro programa. "
+            "Cierra ese proceso o cambia el puerto en la configuración."
         )
 
     _write_launcher_log("Mutex adquirido; creando servidor Flask/Waitress.")
-    app = create_app()
-    server = create_server(app, host=host, port=port, threads=8)
+    try:
+        app = create_app()
+        server = create_server(app, host=host, port=port, threads=8)
+    except Exception as exc:
+        raise RuntimeError(f"No se pudo crear el servidor local en {host}:{port}: {exc}") from exc
 
-    thread = threading.Thread(target=server.run, name="barco-http", daemon=True)
+    server_error: list[BaseException] = []
+
+    def run_server() -> None:
+        try:
+            server.run()
+        except BaseException as exc:  # Keep the real Waitress failure for the launcher thread.
+            server_error.append(exc)
+            _write_launcher_log(f"ERROR SERVIDOR HTTP: {exc}\n{traceback.format_exc()}")
+
+    thread = threading.Thread(target=run_server, name="barco-http", daemon=True)
     thread.start()
 
-    if not _wait_until_ready(port):
+    if not _wait_until_ready(host, port, server_error):
         try:
             server.close()
         except Exception:
             pass
-        raise RuntimeError(f"El servidor local no respondió en {ui} después de 20 segundos.")
+        if server_error:
+            raise RuntimeError(
+                f"El servidor local no pudo iniciar en {host}:{port}: {server_error[0]}"
+            ) from server_error[0]
+        raise RuntimeError(
+            f"El servidor local no respondió en {ui} después de {int(STARTUP_TIMEOUT_SEC)} segundos. "
+            f"Revisa {LOG_DIR / 'launcher.log'} para ver el diagnóstico de arranque."
+        )
 
     _write_launcher_log(f"Servidor listo en {ui}; abriendo navegador.")
     webbrowser.open(ui, new=2)
 
     try:
-        _run_tray(server, port)
+        _run_tray(server, ui)
     finally:
         _close_mutex_handle()
 
