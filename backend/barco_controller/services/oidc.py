@@ -93,6 +93,41 @@ class OIDCSession:
             return
         self.refresh()
 
+    def adopt_session_from(self, other: "OIDCSession") -> bool:
+        """Copy an authenticated session when the OIDC identity did not change.
+
+        Configuration changes such as adding a wall or changing renderer settings
+        rebuild the runtime. They must not force an operator to log in again. A
+        token is reused only when issuer/client credentials still represent the
+        same OIDC client; changing CTRL server, realm or client ID intentionally
+        requires a fresh login.
+        """
+        if not isinstance(other, OIDCSession):
+            return False
+        if (
+            self.issuer_base != other.issuer_base
+            or self.client_id != other.client_id
+            or self.client_secret != other.client_secret
+        ):
+            return False
+
+        with other._lock:
+            old_token = other._token
+            old_well_known = dict(other._well_known) if isinstance(other._well_known, dict) else None
+
+        if old_token is None:
+            return False
+
+        copied = TokenSet(
+            access_token=old_token.access_token,
+            refresh_token=old_token.refresh_token,
+            expires_at=old_token.expires_at,
+        )
+        with self._lock:
+            self._token = copied
+            self._well_known = old_well_known
+        return True
+
     def logout(self) -> None:
         with self._lock:
             self._token = None
