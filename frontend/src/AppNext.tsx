@@ -186,7 +186,7 @@ export default function AppNext() {
       {tab === 'compositions' && <CompositionsScreen layouts={layouts} sources={sources} compositions={compositions} externalSources={externalSources} workplaces={workplaces} currentWorkplaceId={workplaceId} notify={notify} refresh={refreshBase} refreshWall={refreshWallContent} />}
       {tab === 'diagnostics' && config && <DiagnosticsScreen diagnostics={diagnostics} config={config} onRefresh={refreshDiagnostics} notify={notify} />}
       {tab === 'logs' && <LogsScreen routeLogs={routeLogs} cameraLogs={cameraStatus?.logs || []} />}
-      {tab === 'settings' && config && <ConfigurationScreen config={config} sources={sources} onSaved={() => setAuthenticated(false)} notify={notify} />}
+      {tab === 'settings' && config && <ConfigurationScreen config={config} sources={sources} onSaved={() => { void refreshBase(); void refreshDiagnostics() }} notify={notify} />}
     </main>
     <div className="bc-toast-stack">{toasts.map(toast => <div key={toast.id} className={`bc-toast ${toast.kind}`}>{icon(toast.kind === 'ok' ? 'check_circle' : toast.kind === 'warn' ? 'warning' : 'error')}<span>{toast.message}</span></div>)}</div>
   </div>
@@ -556,7 +556,16 @@ function ConfigurationScreen(props: { config: SystemConfig; sources: any[]; onSa
     if (validation) return props.notify('warn', validation)
     try {
       const result = await api.saveSetup(draft)
-      props.notify('ok', result.restartRequiredForServerBinding ? 'Configuración guardada. Reinicia la aplicación para aplicar host/puerto.' : 'Configuración guardada. Inicia sesión nuevamente.')
+      setDraft(JSON.parse(JSON.stringify(result.config)))
+      setWallJustAdded(false)
+      props.notify(
+        result.sessionPreserved ? 'ok' : 'warn',
+        result.restartRequiredForServerBinding
+          ? 'Configuración guardada. Reinicia la aplicación para aplicar host/puerto.'
+          : result.sessionPreserved
+            ? 'Configuración guardada y aplicada correctamente.'
+            : 'Configuración guardada. Cambió la conexión CTRL; inicia sesión nuevamente.'
+      )
       props.onSaved()
     } catch (error: any) { props.notify('error', error.message) }
   }
