@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ipaddress
+
 from flask import Flask, jsonify, request, send_from_directory
 
 from .api.auth import create_auth_blueprint
@@ -16,6 +18,26 @@ from .security import require_operator
 from .state import StateManager
 
 
+def _private_or_local_client(value: str | None) -> bool:
+    """Allow only loopback, RFC1918/ULA and link-local peers.
+
+    The Windows firewall also limits the listening port to LocalSubnet, but this
+    application-level check provides a second boundary if firewall policy changes.
+    """
+    remote = str(value or "").strip()
+    if not remote:
+        return True
+    if remote.lower() == "localhost":
+        return True
+    # IPv6 link-local addresses can include a scope suffix such as %12.
+    candidate = remote.split("%", 1)[0]
+    try:
+        address = ipaddress.ip_address(candidate)
+    except ValueError:
+        return False
+    return bool(address.is_loopback or address.is_private or address.is_link_local)
+
+
 def create_app() -> Flask:
     ensure_runtime_dirs()
     static_dir = STATIC_DIR
@@ -24,6 +46,15 @@ def create_app() -> Flask:
     app.config["BARCO_STATE"] = state
     app.secret_key = getenv("BARCO_APP_SECRET") or load_or_create_app_secret()
     app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
+
+    @app.before_request
+    def restrict_to_local_network():
+        if not _private_or_local_client(request.remote_addr):
+            return jsonify({
+                "ok": False,
+                "error": "Barco Controller solo acepta conexiones desde el equipo local o la red privada.",
+            }), 403
+        return None
 
     app.register_blueprint(create_setup_blueprint(state), url_prefix="/api")
     app.register_blueprint(create_auth_blueprint(state), url_prefix="/api")
