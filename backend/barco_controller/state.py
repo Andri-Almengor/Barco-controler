@@ -68,6 +68,7 @@ class StateManager:
         self._lock = threading.RLock()
         self._state: AppState | None = None
         self._error: str | None = None
+        self._last_session_preserved = False
         self.reload(silent=True)
 
     @property
@@ -80,27 +81,44 @@ class StateManager:
         with self._lock:
             return self._error
 
+    @property
+    def last_session_preserved(self) -> bool:
+        with self._lock:
+            return self._last_session_preserved
+
     def get(self) -> AppState:
         with self._lock:
             if self._state is None:
                 raise ConfigurationError(self._error or "Barco Controller no está configurado")
             return self._state
 
-    def reload(self, *, silent: bool = False) -> bool:
+    def reload(self, *, silent: bool = False, preserve_session: bool = False) -> bool:
+        with self._lock:
+            previous = self._state
+
         try:
             new_state = create_state()
         except Exception as exc:
             with self._lock:
                 self._error = str(exc)
+                self._last_session_preserved = False
                 self._state = None
             if silent:
                 return False
             raise
 
+        session_preserved = False
+        if preserve_session and previous is not None:
+            try:
+                session_preserved = new_state.oidc.adopt_session_from(previous.oidc)
+            except Exception:
+                session_preserved = False
+
         with self._lock:
-            previous = self._state
             self._state = new_state
             self._error = None
+            self._last_session_preserved = session_preserved
+
         if previous:
             try:
                 previous.routes.stop_all(clear_wall=False)
