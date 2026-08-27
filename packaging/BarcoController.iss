@@ -1,12 +1,15 @@
 #define MyAppName "Barco Controller"
-#define MyAppVersion "0.4.0"
+#define MyAppVersion "0.5.0"
 #define MyAppPublisher "Andri-Almengor"
 #define MyAppExeName "BarcoController.exe"
 
 [Setup]
+; IMPORTANT: keep this AppId unchanged so every new installer upgrades the
+; existing Barco Controller installation instead of creating another product.
 AppId={{25DF5D40-59C9-4DFD-8C2B-52E1F7EA77B0}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
+VersionInfoVersion=0.5.0.0
 AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\Barco Controller
 DefaultGroupName=Barco Controller
@@ -19,15 +22,29 @@ PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#MyAppExeName}
+
+; Upgrade behavior: reuse the previous installation and let Windows Restart
+; Manager close the running desktop process before files are replaced.
+UsePreviousAppDir=yes
+UsePreviousGroup=yes
+UsePreviousTasks=yes
+DirExistsWarning=no
 CloseApplications=yes
 RestartApplications=no
-AppMutex=Local\BarcoControllerDesktop
+RestartIfNeededByRun=no
 SetupLogging=yes
 
 [Tasks]
 Name: "desktopicon"; Description: "Crear acceso directo en el escritorio"; GroupDescription: "Accesos directos:"; Flags: unchecked
 Name: "autostart"; Description: "Iniciar Barco Controller al iniciar sesión en Windows"; GroupDescription: "Inicio automático:"; Flags: checkedonce
 Name: "tightvnc"; Description: "Preparar TightVNC Server para el renderer web (recomendado)"; GroupDescription: "Renderer sin Gateway:"; Flags: checkedonce
+
+; Remove stale PyInstaller runtime files from an older build before copying the
+; fresh bundle. Runtime configuration/data live under %LOCALAPPDATA% and are not
+; touched by this cleanup.
+[InstallDelete]
+Type: filesandordirs; Name: "{app}\_internal"
+Type: files; Name: "{app}\{#MyAppExeName}"
 
 [Files]
 Source: "..\dist\BarcoController\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
