@@ -1,5 +1,5 @@
 #define MyAppName "Barco Controller"
-#define MyAppVersion "0.7.2"
+#define MyAppVersion "0.8.0"
 #define MyAppPublisher "Andri-Almengor"
 #define MyAppExeName "BarcoController.exe"
 
@@ -9,7 +9,7 @@
 AppId={{25DF5D40-59C9-4DFD-8C2B-52E1F7EA77B0}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
-VersionInfoVersion=0.7.2.0
+VersionInfoVersion=0.8.0.0
 AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\Barco Controller
 DefaultGroupName=Barco Controller
@@ -23,8 +23,6 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
-; Upgrade behavior: keep the same application identity/folder/tasks and close
-; the previous desktop process before replacing the PyInstaller bundle.
 UsePreviousAppDir=yes
 UsePreviousGroup=yes
 UsePreviousTasks=yes
@@ -40,9 +38,6 @@ Name: "desktopicon"; Description: "Crear acceso directo en el escritorio"; Group
 Name: "autostart"; Description: "Iniciar Barco Controller al iniciar sesión en Windows"; GroupDescription: "Inicio automático:"; Flags: checkedonce
 Name: "tightvnc"; Description: "Preparar TightVNC Server para el renderer web (recomendado)"; GroupDescription: "Renderer sin Gateway:"; Flags: checkedonce
 
-; Remove stale PyInstaller runtime files from an older build before copying the
-; fresh bundle. Runtime configuration/data live under %LOCALAPPDATA% and are not
-; touched by this cleanup.
 [InstallDelete]
 Type: filesandordirs; Name: "{app}\_internal"
 Type: files; Name: "{app}\{#MyAppExeName}"
@@ -50,6 +45,7 @@ Type: files; Name: "{app}\{#MyAppExeName}"
 [Files]
 Source: "..\dist\BarcoController\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\scripts\configure_vnc_windows.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "..\scripts\configure_lan_windows.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Barco Controller"; Filename: "{app}\{#MyAppExeName}"
@@ -57,8 +53,12 @@ Name: "{autodesktop}\Barco Controller"; Filename: "{app}\{#MyAppExeName}"; Tasks
 Name: "{userstartup}\Barco Controller"; Filename: "{app}\{#MyAppExeName}"; Tasks: autostart
 
 [Run]
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\configure_lan_windows.ps1"" -Port 8080"; Description: "Habilitar acceso LAN de Barco Controller"; Flags: runhidden waituntilterminated
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\configure_vnc_windows.ps1"" -InstallIfMissing -Port 5900"; Description: "Configurar TightVNC para el renderer"; Tasks: tightvnc; Flags: waituntilterminated
 Filename: "{app}\{#MyAppExeName}"; Description: "Abrir Barco Controller"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\configure_lan_windows.ps1"" -Remove"; Flags: runhidden waituntilterminated
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\scripts"
@@ -78,8 +78,7 @@ begin
   TaskKillPath := ExpandConstant('{sys}\taskkill.exe');
 
   // During an in-place upgrade the old tray process can keep the single-instance
-  // mutex alive for a short time even after its HTTP listener has stopped. Stop
-  // the complete process tree explicitly before old binaries are removed.
+  // mutex alive for a short time even after its HTTP listener has stopped.
   if FileExists(TaskKillPath) then
   begin
     Exec(
