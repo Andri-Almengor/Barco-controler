@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from desktop_launcher import _normalize_bind_host, _probe_hosts, _ui_url
+from desktop_launcher import _effective_bind_host, _normalize_bind_host, _probe_hosts, _ui_url
 
 
 class DesktopLauncherTests(unittest.TestCase):
@@ -15,6 +15,18 @@ class DesktopLauncherTests(unittest.TestCase):
 
     def test_specific_binding_keeps_host_and_adds_local_fallback(self):
         self.assertEqual(_probe_hosts("192.168.10.20"), ["192.168.10.20", "127.0.0.1"])
+
+    def test_lan_access_uses_all_ipv4_interfaces(self):
+        self.assertEqual(
+            _effective_bind_host({"host": "127.0.0.1", "lan_access": True}),
+            "0.0.0.0",
+        )
+
+    def test_lan_access_can_be_disabled_for_local_only_operation(self):
+        self.assertEqual(
+            _effective_bind_host({"host": "127.0.0.1", "lan_access": False}),
+            "127.0.0.1",
+        )
 
 
 if __name__ == "__main__":
