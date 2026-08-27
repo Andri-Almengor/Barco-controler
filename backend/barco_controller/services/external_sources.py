@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import os
 import shutil
 import subprocess
@@ -58,6 +59,12 @@ class ExternalRendererService:
                 return renderer
         raise ExternalRendererError(f"Renderer no encontrado: {renderer_id}")
 
+    def renderer_for_source(self, source_id: str) -> dict[str, Any]:
+        source = self.repository.get(source_id)
+        if not source:
+            raise ValueError("Contenido externo no encontrado")
+        return self._renderer(str(source.get("rendererId") or "main"))
+
     def _browser_path(self, renderer: dict[str, Any]) -> str:
         configured = str(renderer.get("browser_path") or "").strip()
         if configured and Path(configured).exists():
@@ -82,7 +89,16 @@ class ExternalRendererService:
         return f"{local_origin.rstrip('/')}/api/renderer/{quote(str(source['id']))}"
 
     def _args(self, browser: str, renderer: dict[str, Any], target_url: str) -> list[str]:
-        args = [browser, "--no-first-run", "--no-default-browser-check", f"--user-data-dir={self._profile_path(renderer)}"]
+        args = [
+            browser,
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--new-window",
+            "--start-maximized",
+            "--window-position=0,0",
+            "--disable-background-mode",
+            f"--user-data-dir={self._profile_path(renderer)}",
+        ]
         mode = str(renderer.get("launch_mode") or "kiosk").lower()
         if mode == "app":
             args.append(f"--app={target_url}")
@@ -95,6 +111,100 @@ class ExternalRendererService:
             args.append(target_url)
         args.extend(str(value) for value in (renderer.get("extra_args") or []))
         return args
+
+    @staticmethod
+    def _windows_process_tree(root_pid: int) -> set[int]:
+        if os.name != "nt":
+            return {root_pid}
+        try:
+            from ctypes import wintypes
+
+            TH32CS_SNAPPROCESS = 0x00000002
+            INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+            class PROCESSENTRY32W(ctypes.Structure):
+                _fields_ = [
+                    ("dwSize", wintypes.DWORD),
+                    ("cntUsage", wintypes.DWORD),
+                    ("th32ProcessID", wintypes.DWORD),
+                    ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
+                    ("th32ModuleID", wintypes.DWORD),
+                    ("cntThreads", wintypes.DWORD),
+                    ("th32ParentProcessID", wintypes.DWORD),
+                    ("pcPriClassBase", ctypes.c_long),
+                    ("dwFlags", wintypes.DWORD),
+                    ("szExeFile", ctypes.c_wchar * 260),
+                ]
+
+            kernel32 = ctypes.windll.kernel32
+            snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+            if snapshot == INVALID_HANDLE_VALUE:
+                return {root_pid}
+            try:
+                entry = PROCESSENTRY32W()
+                entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+                parent_map: dict[int, int] = {}
+                if kernel32.Process32FirstW(snapshot, ctypes.byref(entry)):
+                    while True:
+                        parent_map[int(entry.th32ProcessID)] = int(entry.th32ParentProcessID)
+                        if not kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
+                            break
+            finally:
+                kernel32.CloseHandle(snapshot)
+
+            result = {root_pid}
+            changed = True
+            while changed:
+                changed = False
+                for pid, parent in parent_map.items():
+                    if parent in result and pid not in result:
+                        result.add(pid)
+                        changed = True
+            return result
+        except Exception:
+            return {root_pid}
+
+    @classmethod
+    def _force_browser_foreground(cls, root_pid: int, timeout: float = 6.0) -> bool:
+        if os.name != "nt":
+            return True
+        try:
+            from ctypes import wintypes
+
+            user32 = ctypes.windll.user32
+            SW_RESTORE = 9
+            HWND_TOPMOST = -1
+            SWP_NOSIZE = 0x0001
+            SWP_NOMOVE = 0x0002
+            SWP_SHOWWINDOW = 0x0040
+
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                pids = cls._windows_process_tree(root_pid)
+                windows: list[int] = []
+
+                @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+                def enum_proc(hwnd, _lparam):
+                    if not user32.IsWindowVisible(hwnd):
+                        return True
+                    pid = wintypes.DWORD()
+                    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                    if int(pid.value) in pids:
+                        windows.append(int(hwnd))
+                    return True
+
+                user32.EnumWindows(enum_proc, 0)
+                if windows:
+                    hwnd = windows[0]
+                    user32.ShowWindow(hwnd, SW_RESTORE)
+                    user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
+                    user32.BringWindowToTop(hwnd)
+                    user32.SetForegroundWindow(hwnd)
+                    return True
+                time.sleep(0.2)
+        except Exception:
+            return False
+        return False
 
     @staticmethod
     def _terminate_process(process: subprocess.Popen[Any]) -> None:
@@ -131,7 +241,12 @@ class ExternalRendererService:
             previous = self._processes.pop(renderer_id, None)
             if previous:
                 self._terminate_process(previous)
-            process = subprocess.Popen(self._args(browser, renderer, target_url), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            process = subprocess.Popen(
+                self._args(browser, renderer, target_url),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+            )
             self._processes[renderer_id] = process
             self._active[renderer_id] = {
                 "rendererId": renderer_id,
@@ -142,7 +257,13 @@ class ExternalRendererService:
                 "pid": process.pid,
                 "startedAt": time.time(),
                 "barcoSourceId": barco_source_id,
+                "foregroundReady": False,
             }
+
+        foreground_ready = self._force_browser_foreground(process.pid)
+        with self._lock:
+            if renderer_id in self._active:
+                self._active[renderer_id]["foregroundReady"] = foreground_ready
 
         delay = max(0.0, float(renderer.get("startup_delay_sec") or 0))
         if delay:
