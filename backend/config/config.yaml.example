@@ -1,6 +1,10 @@
 server:
+  # Barco Controller sigue abriendo localmente en 127.0.0.1, pero cuando
+  # lan_access=true el launcher escucha en todas las interfaces IPv4 para que
+  # otros equipos de la misma red puedan usar http://IP-DEL-PC:8080.
   host: 127.0.0.1
   port: 8080
+  lan_access: true
   cors_origins: []
   trust_proxy: false
 
@@ -19,6 +23,7 @@ barco:
 workplaces:
   - name: Wall principal
     id: CHANGE_ME
+    role: primary
     geometry:
       type: px
       x: 0
