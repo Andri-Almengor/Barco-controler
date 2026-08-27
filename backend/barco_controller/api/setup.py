@@ -7,6 +7,7 @@ from flask import Blueprint, jsonify, request
 
 from ..config import (
     getenv,
+    load_config,
     load_config_or_default,
     load_endpoints,
     normalize_config,
@@ -197,7 +198,10 @@ def create_setup_blueprint(state):
         try:
             saved = save_config(cfg)
             try:
-                state.reload()
+                state.reload(preserve_session=True)
+                persisted = load_config()
+                if persisted != saved:
+                    raise RuntimeError("La verificación posterior al guardado no coincide con la configuración solicitada")
             except Exception as reload_exc:
                 # Never leave a broken configuration persisted. Restore the last
                 # known-good file, or remove the failed first-run file entirely.
@@ -208,16 +212,18 @@ def create_setup_blueprint(state):
                         CONFIG_PATH.unlink(missing_ok=True)
                     except Exception:
                         pass
-                state.reload(silent=True)
+                state.reload(silent=True, preserve_session=True)
                 raise RuntimeError(
                     f"La nueva configuración no pudo cargarse y se restauró la anterior: {reload_exc}"
                 ) from reload_exc
             return jsonify({
                 "ok": True,
-                "config": safe_public_config(saved),
+                "persisted": True,
+                "config": safe_public_config(persisted),
+                "sessionPreserved": bool(state.last_session_preserved),
                 "restartRequiredForServerBinding": (
-                    (previous.get("server") or {}).get("host") != (saved.get("server") or {}).get("host")
-                    or (previous.get("server") or {}).get("port") != (saved.get("server") or {}).get("port")
+                    (previous.get("server") or {}).get("host") != (persisted.get("server") or {}).get("host")
+                    or (previous.get("server") or {}).get("port") != (persisted.get("server") or {}).get("port")
                 ),
             })
         except Exception as exc:
@@ -228,8 +234,8 @@ def create_setup_blueprint(state):
         if not setup_access_allowed(state):
             return deny()
         try:
-            state.reload()
-            return jsonify({"ok": True})
+            state.reload(preserve_session=True)
+            return jsonify({"ok": True, "sessionPreserved": bool(state.last_session_preserved)})
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
 
