@@ -66,7 +66,7 @@ export const api = {
   setupConfig: () => request<SystemConfig>('/api/setup/config'),
   setupBrowsers: () => request<Array<{ name: string; path: string }>>('/api/setup/browsers'),
   testSetup: (config: SystemConfig) => request<{ ok: boolean; issuer?: string; tokenEndpoint?: string }>('/api/setup/test', { method: 'POST', body: JSON.stringify({ config }) }),
-  discoverSetup: (config: SystemConfig, username = '', password = '', workplaceId = '') => request<DiscoveryResult>('/api/setup/discover', { method: 'POST', body: JSON.stringify({ config, username, password, workplaceId }) }),
+  discoverSetup: (config: SystemConfig | null, username = '', password = '', workplaceId = '') => request<DiscoveryResult>('/api/setup/discover', { method: 'POST', body: JSON.stringify({ config, username, password, workplaceId }) }),
   saveSetup: (config: SystemConfig) => request<{ ok: boolean; config: SystemConfig; restartRequiredForServerBinding: boolean }>('/api/setup/config', { method: 'POST', body: JSON.stringify({ config }) }),
   diagnostics: () => request<DiagnosticsResult>('/api/diagnostics'),
   localDiagnostics: (config: SystemConfig) => request<LocalDiagnostics>('/api/diagnostics/local', { method: 'POST', body: JSON.stringify({ config }) }),
