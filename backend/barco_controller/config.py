@@ -101,12 +101,29 @@ def normalize_config(value: dict[str, Any] | None) -> dict[str, Any]:
     barco.setdefault("tls", {})["verify_tls"] = bool((barco.get("tls") or {}).get("verify_tls", True))
 
     workplaces = []
+    primary_assigned = False
     for workplace in cfg.get("workplaces") or []:
         if not isinstance(workplace, dict):
             continue
         item = dict(workplace)
         item["id"] = str(item.get("id") or "").strip()
         item["name"] = str(item.get("name") or item["id"] or "Workplace").strip()
+
+        raw_role = str(item.get("role") or "").strip().lower()
+        if raw_role == "primary" and not primary_assigned:
+            role = "primary"
+        elif raw_role == "secondary":
+            role = "secondary"
+        elif not primary_assigned:
+            # Backward compatibility: older configs had no role field. The first
+            # configured workplace remains the principal wall automatically.
+            role = "primary"
+        else:
+            role = "secondary"
+        if role == "primary":
+            primary_assigned = True
+        item["role"] = role
+
         geom = item.get("geometry") if isinstance(item.get("geometry"), dict) else {}
         item["geometry"] = {
             "type": str(geom.get("type") or "px"),
@@ -117,6 +134,8 @@ def normalize_config(value: dict[str, Any] | None) -> dict[str, Any]:
         }
         if item["id"]:
             workplaces.append(item)
+    if workplaces and not any(item.get("role") == "primary" for item in workplaces):
+        workplaces[0]["role"] = "primary"
     cfg["workplaces"] = workplaces
 
     renderers = []
