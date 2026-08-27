@@ -80,6 +80,7 @@ export const api = {
   sources: (workplaceId: string) => request<any[]>(`/api/sources?workplaceId=${encodeURIComponent(workplaceId)}`),
   workplaceContent: (workplaceId: string) => request<any>(`/api/workplace/content?workplaceId=${encodeURIComponent(workplaceId)}`),
   applyItem: (workplaceId: string, item: RouteItem) => request('/api/workplace/apply', { method: 'POST', body: JSON.stringify({ workplaceId, ...item }) }),
+  applyLayout: (workplaceId: string, items: LayoutItem[]) => request<{ ok: boolean; items: number }>('/api/workplace/layout', { method: 'POST', body: JSON.stringify({ workplaceId, items }) }),
   clear: (workplaceId: string) => request('/api/workplace/clear?workplaceId=' + encodeURIComponent(workplaceId), { method: 'DELETE' }),
 
   routes: () => request<Route[]>('/api/routes'),
