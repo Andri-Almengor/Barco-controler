@@ -37,6 +37,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Normalize frontend source
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        run: |
+          $path = "frontend/src/AppNext.tsx"
+          $content = Get-Content -Raw -Encoding UTF8 $path
+          $fixed = $content.Replace("idOf(source) === e.target.value", "idOf(value) === e.target.value")
+          if ($fixed -ne $content) {
+            Set-Content -Path $path -Value $fixed -Encoding UTF8 -NoNewline
+            Write-Host "Frontend selector VNC normalizado."
+          }
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -112,11 +124,11 @@ jobs:
           Copy-Item builder_output\BarcoController-Builder.exe tools\bin\BarcoController-Builder.exe -Force
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add tools/bin/BarcoController-Builder.exe
+          git add tools/bin/BarcoController-Builder.exe frontend/src/AppNext.tsx
           git diff --cached --quiet
           if ($LASTEXITCODE -eq 0) {
-            Write-Host "Builder.exe ya está actualizado en el repositorio."
+            Write-Host "Builder.exe y frontend ya están actualizados en el repositorio."
           } else {
-            git commit -m "build: publish BarcoController-Builder.exe [skip ci]"
+            git commit -m "build: publish Builder and normalize frontend [skip ci]"
             git push origin HEAD:main
           }
