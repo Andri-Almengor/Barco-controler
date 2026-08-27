@@ -1,342 +1,278 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import {
-  api, type CameraRule, type CameraStatus, type ExternalSource, type LogEntry,
-  type Route, type RouteItem, type RouteRuntime, type SystemConfig, type Workplace,
+  api,
+  type CameraRule,
+  type CameraStatus,
+  type DiagnosticCheck,
+  type DiagnosticsResult,
+  type ExternalSource,
+  type LayoutItem,
+  type LogEntry,
+  type MixedLayout,
+  type RendererStatus,
+  type Route,
+  type RouteItem,
+  type RouteRuntime,
+  type SystemConfig,
+  type Workplace,
 } from './api'
-import ExternalPanel from './components/ExternalPanel'
-import SettingsPanel from './components/SettingsPanel'
-import SetupWizard from './components/SetupWizard'
-import { emptyCamera, fmt, idOf, labelOf } from './helpers'
+import { defaultRenderer, emptyCamera, idOf, labelOf, looksLikeVnc } from './helpers'
 
-type Tab = 'routes' | 'external' | 'cameras' | 'manual' | 'settings' | 'logs'
+type Tab = 'dashboard' | 'manual' | 'routes' | 'cameras' | 'external' | 'compositions' | 'diagnostics' | 'logs' | 'settings'
+type ManualKind = 'source' | 'composition' | 'external'
+type Toast = { id: number; kind: 'ok' | 'error' | 'warn'; message: string }
+
+const icon = (name: string, className = '') => <span className={`material-symbols-outlined ${className}`}>{name}</span>
+const geometry = (width = 1920, height = 1080) => ({ type: 'px', x: 0, y: 0, width, height })
+const roleOf = (workplace?: Workplace) => (workplace?.role === 'secondary' ? 'secondary' : 'primary')
 
 export default function App() {
   const [setupChecked, setSetupChecked] = useState(false)
   const [configured, setConfigured] = useState(false)
-  const [auth, setAuth] = useState(false)
+  const [authenticated, setAuthenticated] = useState(false)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
-  const [error, setError] = useState('')
-  const [tab, setTab] = useState<Tab>('routes')
+  const [tab, setTab] = useState<Tab>('dashboard')
   const [config, setConfig] = useState<SystemConfig | null>(null)
   const [workplaces, setWorkplaces] = useState<Workplace[]>([])
   const [workplaceId, setWorkplaceId] = useState('')
-  const [compositions, setCompositions] = useState<any[]>([])
   const [sources, setSources] = useState<any[]>([])
+  const [compositions, setCompositions] = useState<any[]>([])
   const [routes, setRoutes] = useState<Route[]>([])
-  const [routeId, setRouteId] = useState('')
   const [runtimes, setRuntimes] = useState<RouteRuntime[]>([])
   const [externalSources, setExternalSources] = useState<ExternalSource[]>([])
+  const [layouts, setLayouts] = useState<MixedLayout[]>([])
   const [cameraRules, setCameraRules] = useState<CameraRule[]>([])
-  const [cameraId, setCameraId] = useState('')
-  const [cameraDraft, setCameraDraft] = useState<CameraRule>(emptyCamera())
   const [cameraStatus, setCameraStatus] = useState<CameraStatus | null>(null)
+  const [rendererStatus, setRendererStatus] = useState<RendererStatus | null>(null)
+  const [diagnostics, setDiagnostics] = useState<DiagnosticsResult | null>(null)
   const [routeLogs, setRouteLogs] = useState<LogEntry[]>([])
-
-  const activeRoute = routes.find(r => r.id === routeId)
-  const activeRuntime = runtimes.find(r => r.routeId === routeId)
-  const activeCamera = cameraRules.find(r => r.id === cameraId)
+  const [wallContent, setWallContent] = useState<any>(null)
+  const [toasts, setToasts] = useState<Toast[]>([])
 
   useEffect(() => {
-    api.setupStatus()
-      .then(async status => {
-        setConfigured(status.configured)
-        setSetupChecked(true)
-        if (status.configured) {
-          try { setAuth((await api.authStatus()).authenticated) }
-          catch { setAuth(false) }
-        }
-      })
-      .catch(e => { setError(e.message); setSetupChecked(true) })
+    api.setupStatus().then(async status => {
+      setConfigured(status.configured)
+      setSetupChecked(true)
+      if (status.configured) {
+        try { setAuthenticated((await api.authStatus()).authenticated) }
+        catch { setAuthenticated(false) }
+      }
+    }).catch(error => {
+      setSetupChecked(true)
+      notify('error', error.message)
+    })
   }, [])
 
   useEffect(() => {
-    const expired = () => setAuth(false)
+    const expired = () => setAuthenticated(false)
     window.addEventListener('barco-auth-expired', expired)
     return () => window.removeEventListener('barco-auth-expired', expired)
   }, [])
 
   useEffect(() => {
-    if (!auth) return
+    if (!authenticated) return
     void refreshBase()
-    const timer = window.setInterval(() => void refreshRuntime(), 1000)
-    return () => window.clearInterval(timer)
-  }, [auth])
+    const fast = window.setInterval(() => void refreshRuntime(), 1500)
+    const slow = window.setInterval(() => void refreshDiagnostics(), 8000)
+    return () => { window.clearInterval(fast); window.clearInterval(slow) }
+  }, [authenticated])
 
   useEffect(() => {
-    if (!auth || !workplaceId) return
-    Promise.all([api.compositions(), api.sources(workplaceId)])
-      .then(([nextCompositions, nextSources]) => {
-        setCompositions(nextCompositions)
+    if (!authenticated || !workplaceId) return
+    Promise.all([api.sources(workplaceId), api.compositions(), api.workplaceContent(workplaceId)])
+      .then(([nextSources, nextCompositions, content]) => {
         setSources(nextSources)
+        setCompositions(nextCompositions)
+        setWallContent(content)
       })
-      .catch(e => setError(e.message))
-  }, [auth, workplaceId])
+      .catch(error => notify('error', error.message))
+  }, [authenticated, workplaceId])
 
-  useEffect(() => {
-    if (activeCamera) setCameraDraft({ ...activeCamera, password: '' })
-  }, [cameraId, activeCamera?.updatedAt])
+  function notify(kind: Toast['kind'], message: string) {
+    if (!message) return
+    const id = Date.now() + Math.floor(Math.random() * 1000)
+    setToasts(current => [...current.slice(-3), { id, kind, message }])
+    window.setTimeout(() => setToasts(current => current.filter(item => item.id !== id)), 4500)
+  }
 
   async function refreshBase() {
     try {
-      const [cfg, nextWorkplaces, nextRoutes, nextExternal, nextCameras] = await Promise.all([
-        api.publicConfig(), api.workplaces(), api.routes(), api.externalSources(), api.cameraRules(),
+      const [cfg, nextWorkplaces, nextRoutes, nextExternal, nextLayouts, nextCameras] = await Promise.all([
+        api.publicConfig(), api.workplaces(), api.routes(), api.externalSources(), api.layouts(), api.cameraRules(),
       ])
       setConfig(cfg)
       setWorkplaces(nextWorkplaces)
       setRoutes(nextRoutes)
       setExternalSources(nextExternal)
+      setLayouts(nextLayouts)
       setCameraRules(nextCameras)
-      setWorkplaceId(current => current || nextWorkplaces[0]?.id || '')
-      setRouteId(current => current || nextRoutes[0]?.id || '')
-      setCameraId(current => current || nextCameras[0]?.id || '')
-      await refreshRuntime()
-    } catch (e: any) { setError(e.message) }
+      setWorkplaceId(current => {
+        if (current && nextWorkplaces.some(w => w.id === current)) return current
+        return nextWorkplaces.find(w => roleOf(w) === 'primary')?.id || nextWorkplaces[0]?.id || ''
+      })
+      await Promise.all([refreshRuntime(), refreshDiagnostics()])
+    } catch (error: any) {
+      notify('error', error.message)
+    }
   }
 
   async function refreshRuntime() {
     try {
-      const [nextRuntimes, nextCameraStatus, nextLogs] = await Promise.all([
-        api.routeRuntimes(), api.cameraStatus(), api.routeLogs(),
+      const [nextRuntimes, nextCameraStatus, nextRendererStatus, nextLogs] = await Promise.all([
+        api.routeRuntimes(), api.cameraStatus(), api.rendererStatus(), api.routeLogs(),
       ])
       setRuntimes(nextRuntimes)
       setCameraStatus(nextCameraStatus)
+      setRendererStatus(nextRendererStatus)
       setRouteLogs(nextLogs)
     } catch { }
   }
 
-  async function login(e: FormEvent) {
-    e.preventDefault()
-    setError('')
+  async function refreshDiagnostics() {
+    try { setDiagnostics(await api.diagnostics()) } catch { }
+  }
+
+  async function login(event: FormEvent) {
+    event.preventDefault()
     try {
       await api.login(username, password)
       setPassword('')
-      setAuth(true)
-    } catch (e: any) { setError(e.message) }
+      setAuthenticated(true)
+    } catch (error: any) { notify('error', error.message) }
   }
 
-  async function saveRoute(patch: Partial<Route>) {
+  async function emergencyStop() {
     try {
-      const base: Partial<Route> = activeRoute || {
-        name: `Recorrido ${routes.length + 1}`, intervalSec: 30, workplaceId, items: [],
-      }
-      const response = await api.saveRoute({ ...base, ...patch })
-      await refreshBase()
-      setRouteId(response.route.id)
-    } catch (e: any) { setError(e.message) }
-  }
-
-  async function routeCommand(action: 'start' | 'stop' | 'pause' | 'resume') {
-    if (!routeId) return
-    try {
-      if (action === 'start') await api.startRoute(routeId)
-      if (action === 'stop') await api.stopRoute(routeId)
-      if (action === 'pause') await api.pauseRoute(routeId)
-      if (action === 'resume') await api.resumeRoute(routeId)
+      await Promise.allSettled([
+        api.stopCameras(),
+        ...routes.map(route => api.stopRoute(route.id)),
+        ...workplaces.map(wall => api.clear(wall.id)),
+      ])
+      notify('warn', 'Parada de emergencia ejecutada en todos los walls configurados.')
       await refreshRuntime()
-    } catch (e: any) { setError(e.message) }
+    } catch (error: any) { notify('error', error.message) }
   }
 
-  function addRouteItem(kind: RouteItem['kind'], id: string) {
-    if (!activeRoute || !id) return
-    const list = kind === 'source' ? sources : kind === 'composition' ? compositions : externalSources
-    const item = list.find(value => idOf(value) === id)
-    void saveRoute({ items: [...activeRoute.items, { kind, id, label: labelOf(item) }] })
-  }
+  if (!setupChecked) return <Splash />
+  if (!configured) return <SetupWizard onConfigured={() => { setConfigured(true); setAuthenticated(false) }} notify={notify} />
+  if (!authenticated) return <Login username={username} password={password} setUsername={setUsername} setPassword={setPassword} onSubmit={login} />
 
-  async function saveCamera() {
-    try {
-      const result = await api.saveCameraRule(cameraDraft)
-      await refreshBase()
-      setCameraId(result.rule.id || '')
-    } catch (e: any) { setError(e.message) }
-  }
+  const activeWorkplace = workplaces.find(w => w.id === workplaceId)
+  const runningRoute = runtimes.find(runtime => runtime.state === 'running')
 
-  if (!setupChecked) return <div className="splash"><div className="spinner"/><p>Cargando Barco Controller…</p></div>
-  if (!configured) return <SetupWizard onConfigured={() => { setConfigured(true); setError('') }}/>
-
-  if (!auth) {
-    return <div className="login">
-      <form className="loginCard" onSubmit={login}>
-        <div className="productMark">BC</div>
-        <h1>Barco Controller</h1>
-        <p>Inicia sesión con un usuario de CTRL para operar y administrar el sistema.</p>
-        <label>Usuario CTRL<input value={username} onChange={e => setUsername(e.target.value)} autoComplete="username"/></label>
-        <label>Contraseña<input type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password"/></label>
-        {error && <div className="alert error">{error}</div>}
-        <button className="primary" type="submit">Conectar</button>
-      </form>
-    </div>
-  }
-
-  return <div className="appShell">
-    <header>
-      <div className="brand"><span className="productMark small">BC</span><div><strong>Barco Controller</strong><small>Control plane</small></div></div>
-      <div className="headerStatus"><span className={cameraStatus?.running ? 'dot ok' : 'dot'}/>{cameraStatus?.running ? 'Cámaras activas' : 'Cámaras detenidas'}<button className="ghost" onClick={async () => { await api.logout(); setAuth(false) }}>Salir</button></div>
-    </header>
-
-    <div className="layout">
-      <aside>
-        <div className="sectionLabel">Workplace</div>
-        <select value={workplaceId} onChange={e => setWorkplaceId(e.target.value)}>
-          {workplaces.length ? workplaces.map(w => <option key={w.id} value={w.id}>{w.name}</option>) : <option value="">Sin workplaces</option>}
-        </select>
-        <nav>
-          {([
-            ['routes', 'Recorridos'], ['external', 'Internet'], ['cameras', 'Cámaras'],
-            ['manual', 'Control manual'], ['settings', 'Configuración'], ['logs', 'Actividad'],
-          ] as [Tab, string][]).map(([id, label]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{label}</button>)}
-        </nav>
-      </aside>
-
-      <main>
-        {error && <div className="alert error dismiss">{error}<button onClick={() => setError('')}>×</button></div>}
-
-        {tab === 'routes' && <RoutePanel
-          routes={routes}
-          routeId={routeId}
-          activeRoute={activeRoute}
-          activeRuntime={activeRuntime}
-          compositions={compositions}
-          sources={sources}
-          externalSources={externalSources}
-          workplaceId={workplaceId}
-          onSelect={setRouteId}
-          onSave={saveRoute}
-          onCommand={routeCommand}
-          onAdd={addRouteItem}
-        />}
-
-        {tab === 'external' && config && <ExternalPanel
-          items={externalSources}
-          renderers={config.renderers}
-          workplaceId={workplaceId}
-          onRefresh={refreshBase}
-          onError={setError}
-        />}
-
-        {tab === 'cameras' && <CameraPanel
-          rules={cameraRules}
-          selectedId={cameraId}
-          draft={cameraDraft}
-          status={cameraStatus}
-          workplaces={workplaces}
-          compositions={compositions}
-          sources={sources}
-          workplaceId={workplaceId}
-          onSelect={setCameraId}
-          onDraft={setCameraDraft}
-          onSave={saveCamera}
-          onRefresh={refreshBase}
-          onRuntime={refreshRuntime}
-          onError={setError}
-        />}
-
-        {tab === 'manual' && <ManualPanel
-          workplaceId={workplaceId}
-          compositions={compositions}
-          sources={sources}
-          externalSources={externalSources}
-          onError={setError}
-        />}
-
-        {tab === 'settings' && config && <SettingsPanel
-          config={config}
-          sources={sources}
-          onSaved={async () => { await api.logout(); setAuth(false) }}
-          onError={setError}
-        />}
-
-        {tab === 'logs' && <section className="panel"><h2>Actividad</h2><LogList title="Recorridos" logs={routeLogs}/><LogList title="Motor de cámaras" logs={cameraStatus?.logs || []}/></section>}
-      </main>
-    </div>
+  return <div className="bc-app">
+    <Topbar workplaces={workplaces} workplaceId={workplaceId} onWorkplace={setWorkplaceId} diagnostics={diagnostics} rendererStatus={rendererStatus} cameraStatus={cameraStatus} onHealth={() => setTab('diagnostics')} onSettings={() => setTab('settings')} />
+    <Sidebar tab={tab} onTab={setTab} onEmergency={() => void emergencyStop()} />
+    <main className="bc-main">
+      {tab === 'dashboard' && <DashboardScreen activeWorkplace={activeWorkplace} workplaces={workplaces} diagnostics={diagnostics} rendererStatus={rendererStatus} cameraStatus={cameraStatus} runningRoute={runningRoute} routes={routes} wallContent={wallContent} onStartRoute={async routeId => { try { await api.startRoute(routeId); await refreshRuntime() } catch (e: any) { notify('error', e.message) } }} onClear={async () => { if (!workplaceId) return; try { await api.clear(workplaceId); setWallContent(null); notify('ok', `Wall ${activeWorkplace?.name || ''} limpiado.`) } catch (e: any) { notify('error', e.message) } }} onCompositions={() => setTab('compositions')} />}
+      {tab === 'manual' && <ManualScreen workplaceId={workplaceId} workplaces={workplaces} sources={sources} compositions={compositions} externalSources={externalSources} onWorkplace={setWorkplaceId} onShow={async (kind, id, label) => { if (!workplaceId) return notify('warn', 'Selecciona un wall de destino.'); try { if (kind === 'external') await api.showExternalSource(id, workplaceId); else await api.applyItem(workplaceId, { kind, id, label }); setWallContent({ content: [{ content: { type: kind, id }, label }] }); notify('ok', `${label || id} enviado a ${activeWorkplace?.name || 'wall'}.`) } catch (e: any) { notify('error', e.message) } }} onClear={async () => { try { await api.clear(workplaceId); setWallContent(null); notify('ok', 'Wall limpiado.') } catch (e: any) { notify('error', e.message) } }} />}
+      {tab === 'routes' && <ToursScreen routes={routes} runtimes={runtimes} workplaces={workplaces} sources={sources} compositions={compositions} externalSources={externalSources} currentWorkplaceId={workplaceId} notify={notify} refresh={refreshBase} />}
+      {tab === 'cameras' && <CamerasScreen rules={cameraRules} status={cameraStatus} workplaces={workplaces} sources={sources} compositions={compositions} currentWorkplaceId={workplaceId} notify={notify} refresh={refreshBase} refreshRuntime={refreshRuntime} />}
+      {tab === 'external' && config && <InternetScreen sources={externalSources} renderers={config.renderers} rendererStatus={rendererStatus} workplaces={workplaces} workplaceId={workplaceId} onWorkplace={setWorkplaceId} notify={notify} refresh={refreshBase} />}
+      {tab === 'compositions' && <CompositionsScreen layouts={layouts} sources={sources} compositions={compositions} externalSources={externalSources} workplaces={workplaces} currentWorkplaceId={workplaceId} notify={notify} refresh={refreshBase} />}
+      {tab === 'diagnostics' && config && <DiagnosticsScreen diagnostics={diagnostics} config={config} onRefresh={refreshDiagnostics} notify={notify} />}
+      {tab === 'logs' && <LogsScreen routeLogs={routeLogs} cameraLogs={cameraStatus?.logs || []} />}
+      {tab === 'settings' && config && <ConfigurationScreen config={config} sources={sources} onSaved={async () => { await api.logout(); setAuthenticated(false) }} notify={notify} />}
+    </main>
+    <div className="bc-toast-stack">{toasts.map(toast => <div key={toast.id} className={`bc-toast ${toast.kind}`}>{icon(toast.kind === 'ok' ? 'check_circle' : toast.kind === 'warn' ? 'warning' : 'error')}<span>{toast.message}</span></div>)}</div>
   </div>
 }
 
-function RoutePanel(props: {
-  routes: Route[]
-  routeId: string
-  activeRoute?: Route
-  activeRuntime?: RouteRuntime
-  compositions: any[]
-  sources: any[]
-  externalSources: ExternalSource[]
-  workplaceId: string
-  onSelect: (id: string) => void
-  onSave: (patch: Partial<Route>) => Promise<void>
-  onCommand: (action: 'start' | 'stop' | 'pause' | 'resume') => Promise<void>
-  onAdd: (kind: RouteItem['kind'], id: string) => void
-}) {
-  const { routes, routeId, activeRoute, activeRuntime, compositions, sources, externalSources, workplaceId, onSelect, onSave, onCommand, onAdd } = props
-  return <div className="twoCol">
-    <section className="panel">
-      <div className="panelHead"><div><h2>Recorridos</h2><p>Composiciones, fuentes y contenido de Internet en una misma secuencia.</p></div><button onClick={() => void onSave({ id: undefined, name: `Recorrido ${routes.length + 1}`, workplaceId, items: [] })}>Nuevo</button></div>
-      <div className="list">{routes.map(route => <button key={route.id} className={routeId === route.id ? 'selected' : ''} onClick={() => onSelect(route.id)}><strong>{route.name}</strong><span>{route.items.length} elementos · {route.intervalSec}s</span></button>)}</div>
-    </section>
-    <section className="panel">
-      {activeRoute ? <>
-        <div className="runtimeBar"><span className={`state ${activeRuntime?.state || 'stopped'}`}>{activeRuntime?.state || 'stopped'}</span><span>Siguiente: {activeRuntime?.nextRunAt ? fmt(activeRuntime.nextRunAt) : '—'}</span></div>
-        <label>Nombre<input value={activeRoute.name} onChange={e => void onSave({ name: e.target.value })}/></label>
-        <label>Intervalo (s)<input type="number" min="3" value={activeRoute.intervalSec} onChange={e => void onSave({ intervalSec: Number(e.target.value) })}/></label>
-        <div className="controls"><button className="primary" onClick={() => void onCommand('start')}>Iniciar</button><button onClick={() => void onCommand('pause')}>Pausar</button><button onClick={() => void onCommand('resume')}>Reanudar</button><button className="danger" onClick={() => void onCommand('stop')}>Detener + limpiar</button></div>
-        <div className="divider"/><h3>Secuencia</h3>
-        <div className="items">{activeRoute.items.map((item, index) => <div className="item" key={`${item.kind}-${item.id}-${index}`}><span className={`badge ${item.kind}`}>{item.kind}</span><span>{item.label || item.id}</span><button onClick={() => void onSave({ items: activeRoute.items.filter((_, i) => i !== index) })}>×</button></div>)}</div>
-        <Adder label="Agregar composición" values={compositions} onAdd={id => onAdd('composition', id)}/>
-        <Adder label="Agregar fuente CTRL" values={sources} onAdd={id => onAdd('source', id)}/>
-        <Adder label="Agregar contenido de Internet" values={externalSources} onAdd={id => onAdd('external', id)}/>
-      </> : <div className="empty">Crea o selecciona un recorrido.</div>}
-    </section>
-  </div>
+function Splash() { return <div className="bc-splash"><div className="bc-loader"/><h1>Barco Controller</h1><p>Inicializando plano de control…</p></div> }
+
+function Login(props: { username: string; password: string; setUsername: (v: string) => void; setPassword: (v: string) => void; onSubmit: (e: FormEvent) => void }) {
+  return <div className="bc-login-page"><form className="bc-login-card" onSubmit={props.onSubmit}><div className="bc-login-brand">Barco Controller</div><div className="bc-login-kicker">ADMIN TERMINAL</div><h1>Operator Authentication</h1><p>Use un usuario válido de CTRL para operar el sistema.</p><label>Usuario CTRL<input value={props.username} onChange={e => props.setUsername(e.target.value)} autoComplete="username" /></label><label>Contraseña<input type="password" value={props.password} onChange={e => props.setPassword(e.target.value)} autoComplete="current-password" /></label><button className="bc-btn primary" type="submit">{icon('login')} Conectar</button></form></div>
 }
 
-function CameraPanel(props: {
-  rules: CameraRule[]
-  selectedId: string
-  draft: CameraRule
-  status: CameraStatus | null
-  workplaces: Workplace[]
-  compositions: any[]
-  sources: any[]
-  workplaceId: string
-  onSelect: (id: string) => void
-  onDraft: (draft: CameraRule) => void
-  onSave: () => Promise<void>
-  onRefresh: () => Promise<void>
-  onRuntime: () => Promise<void>
-  onError: (message: string) => void
-}) {
-  const { rules, selectedId, draft, status, workplaces, compositions, sources, workplaceId, onSelect, onDraft, onSave, onRefresh, onRuntime, onError } = props
-  const content = draft.displayKind === 'composition' ? compositions : sources
-  return <div className="twoCol">
-    <section className="panel">
-      <div className="panelHead"><div><h2>Cámaras</h2><p>Reglas de movimiento con prioridad sobre recorridos.</p></div><button onClick={() => { onSelect(''); onDraft(emptyCamera(workplaceId)) }}>Nueva</button></div>
-      <div className="engineControls"><button className="primary" onClick={async () => { await api.startCameras(); await onRuntime() }}>Iniciar motor</button><button className="danger" onClick={async () => { await api.stopCameras(); await onRuntime() }}>Detener motor</button></div>
-      <div className="list">{rules.map(rule => <button key={rule.id} className={selectedId === rule.id ? 'selected' : ''} onClick={() => onSelect(rule.id || '')}><strong>{rule.name}</strong><span>{rule.detectionMode} · {rule.durationSec}s {rule.hasPassword ? '· credencial guardada' : ''}</span></button>)}</div>
-    </section>
-    <section className="panel cameraForm">
-      <div className="runtimeBar"><span className={draft.enabled ? 'state running' : 'state stopped'}>{draft.enabled ? 'habilitada' : 'deshabilitada'}</span>{status?.activeEvent && <span>Activa: {status.activeEvent.ruleName}</span>}</div>
-      <label>Nombre<input value={draft.name} onChange={e => onDraft({ ...draft, name: e.target.value })}/></label>
-      <label>RTSP<input value={draft.rtspUrl || ''} onChange={e => onDraft({ ...draft, rtspUrl: e.target.value })} placeholder="rtsp://192.168.x.x/..."/></label>
-      <div className="split"><label>Usuario<input value={draft.username || ''} onChange={e => onDraft({ ...draft, username: e.target.value })}/></label><label>Contraseña<input type="password" value={draft.password || ''} onChange={e => onDraft({ ...draft, password: e.target.value })} placeholder={draft.hasPassword ? 'Guardada · deja vacío para conservar' : 'Opcional'}/></label></div>
-      <label>Workplace<select value={draft.workplaceId || workplaceId} onChange={e => onDraft({ ...draft, workplaceId: e.target.value })}>{workplaces.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}</select></label>
-      <div className="split"><label>Salida<select value={draft.displayKind || 'source'} onChange={e => onDraft({ ...draft, displayKind: e.target.value as 'source' | 'composition', itemId: '' })}><option value="source">Fuente</option><option value="composition">Composición</option></select></label><label>Contenido<select value={draft.itemId || ''} onChange={e => { const value = content.find(x => idOf(x) === e.target.value); onDraft({ ...draft, itemId: e.target.value, itemLabel: labelOf(value) }) }}><option value="">Selecciona…</option>{content.map(value => <option key={idOf(value)} value={idOf(value)}>{labelOf(value)}</option>)}</select></label></div>
-      <div className="split"><label>Duración<input type="number" min="1" value={draft.durationSec || 15} onChange={e => onDraft({ ...draft, durationSec: Number(e.target.value) })}/></label><label>Cooldown<input type="number" min="0" value={draft.cooldownSec || 0} onChange={e => onDraft({ ...draft, cooldownSec: Number(e.target.value) })}/></label></div>
-      <div className="split"><label>Detección<select value={draft.detectionMode || 'manual'} onChange={e => onDraft({ ...draft, detectionMode: e.target.value as 'manual' | 'frame_diff' })}><option value="manual">Manual / prueba</option><option value="frame_diff">Movimiento (frame diff)</option></select></label><label>Área mínima<input type="number" min="1" value={draft.minArea || 2500} onChange={e => onDraft({ ...draft, minArea: Number(e.target.value) })}/></label></div>
-      <label className="check"><input type="checkbox" checked={draft.enabled} onChange={e => onDraft({ ...draft, enabled: e.target.checked })}/> Regla habilitada</label>
-      <div className="controls"><button className="primary" onClick={() => void onSave()}>Guardar</button>{draft.id && <button onClick={async () => { try { await api.testCameraRule(draft.id!); await onRuntime() } catch (e: any) { onError(e.message) } }}>Probar evento</button>}{draft.id && <button className="danger" onClick={async () => { await api.deleteCameraRule(draft.id!); onSelect(''); onDraft(emptyCamera(workplaceId)); await onRefresh() }}>Eliminar</button>}</div>
-    </section>
-  </div>
+function Topbar(props: { workplaces: Workplace[]; workplaceId: string; onWorkplace: (id: string) => void; diagnostics: DiagnosticsResult | null; rendererStatus: RendererStatus | null; cameraStatus: CameraStatus | null; onHealth: () => void; onSettings: () => void }) {
+  const diagnostic = (id: string) => props.diagnostics?.checks.find(check => check.id.toLowerCase().includes(id))
+  const ctrlOk = diagnostic('ctrl')?.status === 'ok'
+  const vncOk = diagnostic('vnc')?.status === 'ok' || !!props.rendererStatus?.active.length
+  const rendererOk = !!props.rendererStatus?.active.some(item => item.running)
+  return <header className="bc-topbar"><div className="bc-top-brand">Barco Controller</div><div className="bc-top-statuses"><span><i className={ctrlOk ? 'ok' : ''}/>CTRL</span><span><i className={vncOk ? 'ok' : ''}/>VNC</span><span><i className={rendererOk ? 'ok' : ''}/>Renderer</span><span><i className={props.cameraStatus?.running ? 'ok' : ''}/>Cameras</span></div><div className="bc-top-actions"><label className="bc-workplace-select">{icon('desktop_windows')}<select value={props.workplaceId} onChange={e => props.onWorkplace(e.target.value)} aria-label="Wall de destino">{props.workplaces.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}</select></label><button className="bc-top-button" onClick={props.onHealth}>System Health</button><button className="bc-icon-button">{icon('notifications')}</button><button className="bc-icon-button" onClick={props.onSettings}>{icon('settings')}</button><div className="bc-avatar">BC</div></div></header>
 }
 
-function ManualPanel({ workplaceId, compositions, sources, externalSources, onError }: { workplaceId: string; compositions: any[]; sources: any[]; externalSources: ExternalSource[]; onError: (message: string) => void }) {
-  return <section className="panel"><h2>Control manual</h2><p>Todas las acciones utilizan el mismo coordinador exclusivo del wall.</p><div className="manualGrid three"><div><h3>Composiciones</h3>{compositions.map(item => <button key={idOf(item)} onClick={() => api.applyItem(workplaceId, { kind: 'composition', id: idOf(item), label: labelOf(item) }).catch(e => onError(e.message))}>{labelOf(item)}</button>)}</div><div><h3>Fuentes CTRL</h3>{sources.map(item => <button key={idOf(item)} onClick={() => api.applyItem(workplaceId, { kind: 'source', id: idOf(item), label: labelOf(item) }).catch(e => onError(e.message))}>{labelOf(item)}</button>)}</div><div><h3>Internet</h3>{externalSources.map(item => <button key={item.id} onClick={() => item.id && api.showExternalSource(item.id, workplaceId).catch(e => onError(e.message))}>{item.name}</button>)}</div></div><button className="danger clearWall" onClick={() => api.clear(workplaceId).catch(e => onError(e.message))}>Limpiar wall</button></section>
+function Sidebar(props: { tab: Tab; onTab: (tab: Tab) => void; onEmergency: () => void }) {
+  const nav: Array<[Tab, string, string]> = [['dashboard','Dashboard','dashboard'],['manual','Manual Control','tune'],['routes','Tours','route'],['cameras','Cameras','videocam'],['external','Internet','language'],['compositions','Compositions','dashboard_customize'],['diagnostics','Diagnosis','medical_services'],['logs','Activity Logs','history'],['settings','Configuration','settings']]
+  return <aside className="bc-sidebar"><div className="bc-side-profile"><div className="bc-avatar large">BC</div><div><strong>Barco Controller</strong><small>Admin Terminal</small></div></div><nav className="bc-side-nav">{nav.map(([tab,label,iconName]) => <button key={tab} className={props.tab === tab ? 'active' : ''} onClick={() => props.onTab(tab)}>{icon(iconName)}<span>{label}</span></button>)}</nav><div className="bc-side-bottom"><button className="bc-emergency" onClick={props.onEmergency}>{icon('warning')} Emergency Stop</button><button>{icon('help')} Support</button><button onClick={() => props.onTab('logs')}>{icon('terminal')} Logs</button></div></aside>
 }
 
-function Adder({ label, values, onAdd }: { label: string; values: any[]; onAdd: (id: string) => void }) {
-  const [value, setValue] = useState('')
-  return <div className="adder"><select value={value} onChange={e => setValue(e.target.value)}><option value="">{label}…</option>{values.map(item => <option key={idOf(item)} value={idOf(item)}>{labelOf(item)}</option>)}</select><button disabled={!value} onClick={() => { if (value) { onAdd(value); setValue('') } }}>+</button></div>
+function ScreenTitle({ title, subtitle, actions }: { title: string; subtitle?: string; actions?: ReactNode }) { return <div className="bc-screen-title"><div><h1>{title}</h1>{subtitle && <p>{subtitle}</p>}</div>{actions && <div className="bc-title-actions">{actions}</div>}</div> }
+
+function DashboardScreen(props: { activeWorkplace?: Workplace; workplaces: Workplace[]; diagnostics: DiagnosticsResult | null; rendererStatus: RendererStatus | null; cameraStatus: CameraStatus | null; runningRoute?: RouteRuntime; routes: Route[]; wallContent: any; onStartRoute: (id: string) => Promise<void>; onClear: () => Promise<void>; onCompositions: () => void }) {
+  const ctrl = props.diagnostics?.checks.find(c => c.id.toLowerCase().includes('ctrl'))
+  const vnc = props.diagnostics?.checks.find(c => c.id.toLowerCase().includes('vnc'))
+  const current = describeContent(props.wallContent)
+  const operational = props.diagnostics?.ready !== false
+  return <div className="bc-screen dashboard-screen"><section className="bc-operational-banner"><div><h1><span className={`bc-pulse ${operational ? '' : 'warn'}`}/>{operational ? 'System Operational' : 'System Attention'}</h1><p>{operational ? 'All core services running nominally.' : 'One or more modules require attention.'} {props.activeWorkplace?.name || 'No workplace'} active.</p></div><div className="bc-uptime">Walls: {props.workplaces.length}<br/>Target: {props.activeWorkplace?.name || '—'}</div></section><div className="bc-status-grid"><StatusCard title="CTRL" iconName="memory" state={ctrl?.status === 'ok' ? 'Ready' : ctrl?.status || 'Unknown'} tone={ctrl?.status === 'ok' ? 'ok' : 'warn'} /><StatusCard title="VNC" iconName="desktop_windows" state={vnc?.status === 'ok' ? 'Active' : vnc?.status || 'Unknown'} tone={vnc?.status === 'ok' ? 'red' : 'warn'} /><StatusCard title="Renderer" iconName="dns" state={props.rendererStatus?.active.some(r => r.running) ? 'Online' : 'Standby'} tone={props.rendererStatus?.active.some(r => r.running) ? 'ok' : 'muted'} /><StatusCard title="Cameras" iconName="videocam" state={`${props.cameraStatus?.rulesCount || 0} Rules`} tone={props.cameraStatus?.running ? 'ok' : 'muted'} /><StatusCard title="Tours" iconName="route" state={props.runningRoute?.routeName || 'None'} tone={props.runningRoute ? 'red' : 'muted'} /></div><div className="bc-dashboard-grid"><section className="bc-panel bc-wall-preview-panel"><h3>Video Wall Preview — {props.activeWorkplace?.name || 'No target'}</h3><div className="bc-wall-preview four"><div className="wall-tile active"><span>CH-01: {current || 'Current Content'}</span><div className="wall-placeholder grid-map">{icon('monitoring')}</div><b>● LIVE</b></div><div className="wall-tile"><span>CH-02: Camera Feed</span><div className="wall-placeholder">{icon('videocam_off')}</div></div><div className="wall-tile"><span>CH-03: System Metrics</span><div className="wall-bars"><i/><i/><i/><i/><i/><i/></div></div><div className="wall-tile"><span>CH-04: Standby</span><div className="wall-placeholder"><small>NO INPUT</small></div></div></div></section><aside className="bc-dashboard-right"><section className="bc-panel source-detail"><h3>Active Source Detail</h3><h2>{current || 'No active source detected'}</h2><dl><div><dt>Destination</dt><dd>{props.activeWorkplace?.name || '—'}</dd></div><div><dt>Workplace ID</dt><dd>{props.activeWorkplace?.id || '—'}</dd></div><div><dt>Resolution</dt><dd>{props.activeWorkplace?.geometry ? `${props.activeWorkplace.geometry.width}×${props.activeWorkplace.geometry.height}` : '—'}</dd></div><div><dt>Role</dt><dd>{roleOf(props.activeWorkplace)}</dd></div></dl></section><section className="bc-panel quick-actions"><h3>Quick Actions</h3><button className="bc-btn primary" disabled={!props.routes.length} onClick={() => props.routes[0] && void props.onStartRoute(props.routes[0].id)}>Start Tour</button><div><button className="bc-btn" onClick={props.onCompositions}>Load Preset</button><button className="bc-btn" onClick={() => void props.onClear()}>Clear Wall</button></div></section></aside></div></div>
 }
 
-function LogList({ title, logs }: { title: string; logs: LogEntry[] }) {
-  return <div className="logBlock"><h3>{title}</h3>{logs.length ? logs.slice(0, 80).map((log, index) => <div className={`log ${log.level}`} key={`${log.ts}-${index}`}><time>{new Date(log.ts * 1000).toLocaleTimeString()}</time><span>{log.message}</span></div>) : <div className="empty">Sin eventos.</div>}</div>
+function StatusCard({ title, iconName, state, tone }: { title: string; iconName: string; state: string; tone: 'ok' | 'red' | 'warn' | 'muted' }) { return <div className={`bc-status-card ${tone === 'red' ? 'selected' : ''}`}><div><span>{title}</span>{icon(iconName)}</div><strong className={tone}>{state}</strong></div> }
+
+function ManualScreen(props: { workplaceId: string; workplaces: Workplace[]; sources: any[]; compositions: any[]; externalSources: ExternalSource[]; onWorkplace: (id: string) => void; onShow: (kind: ManualKind, id: string, label: string) => Promise<void>; onClear: () => Promise<void> }) {
+  const [kind, setKind] = useState<ManualKind>('source'); const [query, setQuery] = useState(''); const [selectedId, setSelectedId] = useState('')
+  const values = kind === 'source' ? props.sources : kind === 'composition' ? props.compositions : props.externalSources
+  const filtered = values.filter(value => labelOf(value).toLowerCase().includes(query.toLowerCase()))
+  useEffect(() => { setSelectedId(current => filtered.some(v => idOf(v) === current) ? current : idOf(filtered[0])) }, [kind, props.workplaceId, values.length])
+  const selected = values.find(v => idOf(v) === selectedId)
+  return <div className="bc-screen manual-screen"><div className="manual-layout"><section className="manual-library bc-panel"><div className="bc-segmented"><button className={kind === 'source' ? 'active' : ''} onClick={() => setKind('source')}>Sources</button><button className={kind === 'composition' ? 'active' : ''} onClick={() => setKind('composition')}>Compositions</button><button className={kind === 'external' ? 'active' : ''} onClick={() => setKind('external')}>External</button></div><div className="bc-search">{icon('search')}<input value={query} onChange={e => setQuery(e.target.value)} placeholder="Filter sources…" /></div><div className="source-grid">{filtered.map((value,index) => <button key={idOf(value) || index} className={selectedId === idOf(value) ? 'active' : ''} onClick={() => setSelectedId(idOf(value))}><div className="source-thumb">{icon(kind === 'external' ? 'language' : kind === 'composition' ? 'dashboard_customize' : 'monitor')}</div><span className="source-badge">{kind === 'external' ? 'WEB' : kind === 'composition' ? 'COMP' : `SRC ${String(index + 1).padStart(2,'0')}`}</span><strong>{labelOf(value)}</strong></button>)}</div></section><section className="manual-stage bc-panel"><div className="manual-toolbar"><button className="bc-btn primary" disabled={!selectedId} onClick={() => selectedId && void props.onShow(kind, selectedId, labelOf(selected))}>{icon('cast')} Show on Wall</button><button className="bc-btn">{icon('visibility')} Preview</button><button className="bc-text-danger" onClick={() => void props.onClear()}>{icon('delete_sweep')} Clear Wall</button></div><div className="manual-canvas"><div className="canvas-cross vertical"/><div className="canvas-cross horizontal"/>{selected ? <div className="manual-preview-card"><div className="preview-art">{icon(kind === 'external' ? 'language' : 'monitoring')}</div><strong>{labelOf(selected)}</strong><small>Preview · {kind}</small></div> : <div className="wall-placeholder">NO SOURCE SELECTED</div>}<div className="live-pill">● LIVE: {labelOf(selected)}</div></div></section><aside className="manual-meta bc-panel"><h3>{icon('info')} Source Metadata</h3><label>Destination Wall<select value={props.workplaceId} onChange={e => props.onWorkplace(e.target.value)}>{props.workplaces.map(w => <option key={w.id} value={w.id}>{w.name}{roleOf(w) === 'primary' ? ' · Principal' : ' · Secundario'}</option>)}</select></label><dl><div><dt>ID</dt><dd>{selectedId || '—'}</dd></div><div><dt>TYPE</dt><dd>{kind.toUpperCase()}</dd></div><div><dt>NAME</dt><dd>{labelOf(selected)}</dd></div><div><dt>NETWORK STATUS</dt><dd><span className="bc-dot ok"/>Stable</dd></div><div><dt>AUDIO</dt><dd>Managed by CTRL</dd></div></dl></aside></div></div>
 }
+
+function ToursScreen(props: { routes: Route[]; runtimes: RouteRuntime[]; workplaces: Workplace[]; sources: any[]; compositions: any[]; externalSources: ExternalSource[]; currentWorkplaceId: string; notify: (kind: Toast['kind'], message: string) => void; refresh: () => Promise<void> }) {
+  const [routeId, setRouteId] = useState(props.routes[0]?.id || '')
+  useEffect(() => { if (!routeId && props.routes[0]?.id) setRouteId(props.routes[0].id) }, [props.routes])
+  const route = props.routes.find(r => r.id === routeId); const runtime = props.runtimes.find(r => r.routeId === routeId)
+  const save = async (patch: Partial<Route>) => { try { const base: Partial<Route> = route || { name:`Tour ${props.routes.length + 1}`, intervalSec:30, workplaceId:props.currentWorkplaceId, items:[] }; const result = await api.saveRoute({ ...base, ...patch }); setRouteId(result.route.id); await props.refresh() } catch (e:any) { props.notify('error', e.message) } }
+  const command = async (action:'start'|'pause'|'resume'|'stop') => { if (!routeId) return; try { if (action==='start') await api.startRoute(routeId); if (action==='pause') await api.pauseRoute(routeId); if (action==='resume') await api.resumeRoute(routeId); if (action==='stop') await api.stopRoute(routeId); await props.refresh() } catch(e:any){ props.notify('error',e.message) } }
+  const addItem = async (kind:RouteItem['kind'],id:string) => { if(!route||!id)return; const list=kind==='source'?props.sources:kind==='composition'?props.compositions:props.externalSources; const value=list.find(v=>idOf(v)===id); await save({items:[...route.items,{kind,id,label:labelOf(value)}]}) }
+  return <div className="bc-screen tours-screen"><ScreenTitle title="Automated Tours" subtitle="Manage automated sequences across your configured video walls." actions={<><select className="bc-compact-select" value={routeId} onChange={e=>setRouteId(e.target.value)}><option value="">Select Tour</option>{props.routes.map(r=><option key={r.id} value={r.id}>{r.name}</option>)}</select><button className="bc-btn" onClick={()=>void save({id:undefined,name:`Tour ${props.routes.length+1}`,workplaceId:props.currentWorkplaceId,items:[]})}>{icon('add')} New Tour</button></>} />{route ? <div className="tour-editor bc-panel"><div className="tour-heading"><div><span className={`bc-runtime-dot ${runtime?.state==='running'?'running':''}`}/><div><input className="tour-name-input" value={route.name} onChange={e=>void save({name:e.target.value})}/><p>{route.items.length} steps · {route.intervalSec}s default interval</p></div></div><div className="tour-actions"><button className="bc-btn" onClick={()=>void command('pause')}>{icon('pause')} Pause</button><button className="bc-btn" onClick={()=>void command('resume')}>{icon('play_arrow')} Resume</button><button className="bc-btn danger" onClick={()=>void command('stop')}>{icon('stop')} Stop</button><button className="bc-btn primary" onClick={()=>void command('start')}>{icon('play_arrow')} Start</button></div></div><div className="tour-config-row"><label>Destination Wall<select value={route.workplaceId} onChange={e=>void save({workplaceId:e.target.value})}>{props.workplaces.map(w=><option key={w.id} value={w.id}>{w.name}{roleOf(w)==='secondary'?' · Secondary':' · Principal'}</option>)}</select></label><label>Interval (seconds)<input type="number" min="3" value={route.intervalSec} onChange={e=>void save({intervalSec:Number(e.target.value)})}/></label><div className="runtime-state"><small>STATE</small><strong>{runtime?.state||'stopped'}</strong></div></div><h3>Execution Sequence</h3><div className="tour-timeline">{route.items.map((item,index)=><div className={`tour-step ${runtime?.index===index&&runtime.state==='running'?'active':''}`} key={`${item.kind}-${item.id}-${index}`}><div className="step-index">{index+1}</div><div className="step-card"><div><span className={`bc-kind ${item.kind}`}>{item.kind}</span><strong>{item.label||item.id}</strong><small>Target: {props.workplaces.find(w=>w.id===route.workplaceId)?.name||route.workplaceId}</small></div><button onClick={()=>void save({items:route.items.filter((_,i)=>i!==index)})}>{icon('close')}</button></div></div>)}</div><div className="tour-adders"><RouteAdder label="Add CTRL Source" values={props.sources} onAdd={id=>void addItem('source',id)}/><RouteAdder label="Add Composition" values={props.compositions} onAdd={id=>void addItem('composition',id)}/><RouteAdder label="Add Internet" values={props.externalSources} onAdd={id=>void addItem('external',id)}/></div></div> : <EmptyState iconName="route" title="No tours configured" action={<button className="bc-btn primary" onClick={()=>void save({id:undefined,name:'Morning Overview',workplaceId:props.currentWorkplaceId,items:[]})}>Create first tour</button>} />}</div>
+}
+
+function RouteAdder({label,values,onAdd}:{label:string;values:any[];onAdd:(id:string)=>void}){const[value,setValue]=useState('');return <label>{label}<div><select value={value} onChange={e=>setValue(e.target.value)}><option value="">Select…</option>{values.map(item=><option key={idOf(item)} value={idOf(item)}>{labelOf(item)}</option>)}</select><button className="bc-btn" disabled={!value} onClick={()=>{onAdd(value);setValue('')}}>{icon('add')}</button></div></label>}
+
+function CamerasScreen(props:{rules:CameraRule[];status:CameraStatus|null;workplaces:Workplace[];sources:any[];compositions:any[];currentWorkplaceId:string;notify:(kind:Toast['kind'],message:string)=>void;refresh:()=>Promise<void>;refreshRuntime:()=>Promise<void>}){
+  const[selectedId,setSelectedId]=useState(props.rules[0]?.id||'');const active=props.rules.find(r=>r.id===selectedId);const[draft,setDraft]=useState<CameraRule>(active?{...active,password:''}:emptyCamera(props.currentWorkplaceId));useEffect(()=>{const next=props.rules.find(r=>r.id===selectedId);if(next)setDraft({...next,password:''})},[selectedId,props.rules]);const values=draft.displayKind==='composition'?props.compositions:props.sources
+  const save=async()=>{try{const result=await api.saveCameraRule(draft);setSelectedId(result.rule.id||'');await props.refresh();props.notify('ok','Camera rule saved.')}catch(e:any){props.notify('error',e.message)}}
+  return <div className="bc-screen cameras-screen"><ScreenTitle title="Surveillance Feeds" subtitle="Motion-triggered sources with priority over tours." actions={<><button className="bc-btn" onClick={async()=>{await api.startCameras();await props.refreshRuntime()}}>{icon('play_arrow')} Start Engine</button><button className="bc-btn" onClick={async()=>{await api.stopCameras();await props.refreshRuntime()}}>{icon('stop')} Stop Engine</button></>} /><div className="camera-layout"><section className="camera-list bc-panel"><div className="camera-list-head"><h3>Surveillance Feeds</h3><button onClick={()=>{setSelectedId('');setDraft(emptyCamera(props.currentWorkplaceId))}}>{icon('add')}</button></div>{props.rules.map(rule=><button className={selectedId===rule.id?'active':''} key={rule.id} onClick={()=>setSelectedId(rule.id||'')}><div className="camera-thumb">{icon('videocam')}</div><div><strong>{rule.name}</strong><small>{props.workplaces.find(w=>w.id===rule.workplaceId)?.name||'No wall'} · {rule.detectionMode}</small></div><span className={`bc-dot ${rule.enabled?'ok':''}`}/></button>)}</section><section className="camera-center bc-panel"><div className="camera-preview"><div className="scan-grid"/>{icon('videocam')}<span>{draft.name}</span></div><div className="camera-form-grid"><label>RTSP URL<input value={draft.rtspUrl||''} onChange={e=>setDraft({...draft,rtspUrl:e.target.value})}/></label><label>Username<input value={draft.username||''} onChange={e=>setDraft({...draft,username:e.target.value})}/></label><label>Password<input type="password" value={draft.password||''} placeholder={draft.hasPassword?'Saved credential':''} onChange={e=>setDraft({...draft,password:e.target.value})}/></label><label>Detection Mode<select value={draft.detectionMode||'manual'} onChange={e=>setDraft({...draft,detectionMode:e.target.value as CameraRule['detectionMode']})}><option value="manual">Manual test</option><option value="frame_diff">Frame difference</option></select></label></div><div className="camera-actions"><button className="bc-btn" disabled={!draft.id} onClick={async()=>{if(!draft.id)return;try{await api.testCameraRule(draft.id);props.notify('ok','Camera test event sent.')}catch(e:any){props.notify('error',e.message)}}}>{icon('science')} Test Stream</button><button className="bc-btn primary" onClick={()=>void save()}>{icon('save')} Save Config</button></div></section><aside className="camera-properties bc-panel"><h3>Properties</h3><label>Source / Event Name<input value={draft.name} onChange={e=>setDraft({...draft,name:e.target.value})}/></label><label>Destination Wall<select value={draft.workplaceId||props.currentWorkplaceId} onChange={e=>setDraft({...draft,workplaceId:e.target.value})}>{props.workplaces.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}</select></label><label>Display Type<select value={draft.displayKind||'source'} onChange={e=>setDraft({...draft,displayKind:e.target.value as CameraRule['displayKind'],itemId:''})}><option value="source">CTRL Source</option><option value="composition">CTRL Composition</option></select></label><label>Content<select value={draft.itemId||''} onChange={e=>{const item=values.find(v=>idOf(v)===e.target.value);setDraft({...draft,itemId:e.target.value,itemLabel:labelOf(item)})}}><option value="">Select…</option>{values.map(v=><option key={idOf(v)} value={idOf(v)}>{labelOf(v)}</option>)}</select></label><div className="property-quad"><label>Duration<input type="number" value={draft.durationSec||15} onChange={e=>setDraft({...draft,durationSec:Number(e.target.value)})}/></label><label>Cooldown<input type="number" value={draft.cooldownSec||20} onChange={e=>setDraft({...draft,cooldownSec:Number(e.target.value)})}/></label><label>Priority<input type="number" value={draft.priority||1} onChange={e=>setDraft({...draft,priority:Number(e.target.value)})}/></label><label>Min Area<input type="number" value={draft.minArea||2500} onChange={e=>setDraft({...draft,minArea:Number(e.target.value)})}/></label></div><label className="bc-toggle-row"><input type="checkbox" checked={draft.enabled} onChange={e=>setDraft({...draft,enabled:e.target.checked})}/><span>Rule Enabled</span></label>{draft.id&&<button className="bc-btn danger full" onClick={async()=>{await api.deleteCameraRule(draft.id!);setSelectedId('');setDraft(emptyCamera(props.currentWorkplaceId));await props.refresh()}}>{icon('delete')} Delete Rule</button>}</aside></div><section className="bc-panel camera-events"><h3>Recent Event Log</h3><LogsTable logs={props.status?.logs||[]} compact /></section></div>
+}
+
+function InternetScreen(props:{sources:ExternalSource[];renderers:SystemConfig['renderers'];rendererStatus:RendererStatus|null;workplaces:Workplace[];workplaceId:string;onWorkplace:(id:string)=>void;notify:(kind:Toast['kind'],message:string)=>void;refresh:()=>Promise<void>}){
+  const[selectedId,setSelectedId]=useState(props.sources[0]?.id||'');const selected=props.sources.find(source=>source.id===selectedId);const[draft,setDraft]=useState<ExternalSource>(selected||{name:'',type:'web',url:'https://',rendererId:props.renderers[0]?.id||'main',enabled:true});useEffect(()=>{const value=props.sources.find(source=>source.id===selectedId);if(value)setDraft({...value})},[selectedId,props.sources]);const save=async()=>{try{const result=await api.saveExternalSource(draft);setSelectedId(result.source.id||'');await props.refresh();props.notify('ok','Internet source saved.')}catch(e:any){props.notify('error',e.message)}}
+  return <div className="bc-screen internet-screen"><ScreenTitle title="Internet Sources" subtitle="Manage web content delivery to rendering nodes." actions={<button className="bc-btn" onClick={()=>void props.refresh()}>{icon('refresh')} Refresh Status</button>} /><div className="internet-layout"><section className="internet-library bc-panel"><div className="internet-head"><h3>ACTIVE WEB SOURCES</h3><span>{props.rendererStatus?.active.filter(r=>r.running).length||0} ONLINE</span></div><div className="internet-cards">{props.sources.map(source=><article className={selectedId===source.id?'active':''} key={source.id} onClick={()=>setSelectedId(source.id||'')}><div className="web-thumb">{icon(source.type==='web'?'language':source.type==='image'?'image':'movie')}</div><span className="online-badge">{source.enabled?'ONLINE':'OFFLINE'}</span><strong>{source.name}</strong><small>{source.url}</small><div><span>{source.rendererId}</span><button onClick={async event=>{event.stopPropagation();try{await api.prepareExternalSource(source.id!);props.notify('ok','Renderer opened and brought to foreground.')}catch(e:any){props.notify('error',e.message)}}}>Open in Renderer</button></div></article>)}</div></section><aside className="internet-form bc-panel"><h3>ADD / EDIT CONTENT</h3><label>Source URL<input value={draft.url} onChange={e=>setDraft({...draft,url:e.target.value})}/></label><label>Name<input value={draft.name} onChange={e=>setDraft({...draft,name:e.target.value})}/></label><label>Type<select value={draft.type} onChange={e=>setDraft({...draft,type:e.target.value as ExternalSource['type']})}><option value="web">Web</option><option value="image">Image</option><option value="video">Direct Video</option></select></label><label>Target Renderer<select value={draft.rendererId} onChange={e=>setDraft({...draft,rendererId:e.target.value})}>{props.renderers.map(r=><option key={r.id} value={r.id}>{r.name}</option>)}</select></label><label>Destination Wall<select value={props.workplaceId} onChange={e=>props.onWorkplace(e.target.value)}>{props.workplaces.map(w=><option key={w.id} value={w.id}>{w.name}{roleOf(w)==='secondary'?' · Secondary':''}</option>)}</select></label><div className="internet-actions"><button className="bc-btn" onClick={()=>void save()}>{icon('save')} Save</button><button className="bc-btn primary" disabled={!draft.id} onClick={async()=>{if(!draft.id)return;try{await api.showExternalSource(draft.id,props.workplaceId);props.notify('ok',`External source sent to ${props.workplaces.find(w=>w.id===props.workplaceId)?.name||'wall'}.`)}catch(e:any){props.notify('error',e.message)}}}>{icon('cast')} Initialize Web Source</button></div>{draft.id&&<button className="bc-text-danger" onClick={async()=>{await api.deleteExternalSource(draft.id!);setSelectedId('');setDraft({name:'',type:'web',url:'https://',rendererId:props.renderers[0]?.id||'main',enabled:true});await props.refresh()}}>{icon('delete')} Delete source</button>}<div className="renderer-health"><h4>Renderer Status</h4>{props.rendererStatus?.active.map(r=><div key={r.rendererId}><span className={`bc-dot ${r.running?'ok':''}`}/><span>{r.rendererId}</span><small>{r.foregroundReady?'Foreground ready':r.running?'Running':'Stopped'}</small></div>)||<p>No active renderer.</p>}</div></aside></div></div>
+}
+
+function CompositionsScreen(props:{layouts:MixedLayout[];sources:any[];compositions:any[];externalSources:ExternalSource[];workplaces:Workplace[];currentWorkplaceId:string;notify:(kind:Toast['kind'],message:string)=>void;refresh:()=>Promise<void>}){
+  const[layoutId,setLayoutId]=useState(props.layouts[0]?.id||'');const active=props.layouts.find(layout=>layout.id===layoutId);const[draft,setDraft]=useState<MixedLayout>(active?JSON.parse(JSON.stringify(active)):{name:'New Composition',workplaceId:props.currentWorkplaceId,items:[]});const[selectedIndex,setSelectedIndex]=useState<number>(-1);useEffect(()=>{const next=props.layouts.find(layout=>layout.id===layoutId);if(next){setDraft(JSON.parse(JSON.stringify(next)));setSelectedIndex(-1)}},[layoutId,props.layouts]);const wall=props.workplaces.find(w=>w.id===draft.workplaceId)||props.workplaces.find(w=>w.id===props.currentWorkplaceId);const wallWidth=wall?.geometry?.width||1920;const wallHeight=wall?.geometry?.height||1080;const selectedItem=draft.items[selectedIndex];const valuesFor=(kind:LayoutItem['kind'])=>kind==='source'?props.sources:kind==='composition'?props.compositions:props.externalSources
+  const addItem=(kind:LayoutItem['kind'],id:string)=>{const value=valuesFor(kind).find(v=>idOf(v)===id);const count=draft.items.length;const item:LayoutItem={kind,id,label:labelOf(value),geometry:{type:'px',x:count%2?Math.floor(wallWidth/2):0,y:count>1?Math.floor(wallHeight/2):0,width:Math.floor(wallWidth/2),height:Math.floor(wallHeight/2)}};setDraft({...draft,items:[...draft.items,item]});setSelectedIndex(draft.items.length)}
+  const patchItem=(patch:Partial<LayoutItem>)=>{if(selectedIndex<0)return;const next=[...draft.items];next[selectedIndex]={...next[selectedIndex],...patch};setDraft({...draft,items:next})};const patchGeometry=(patch:Partial<LayoutItem['geometry']>)=>{if(!selectedItem)return;patchItem({geometry:{...selectedItem.geometry,...patch}})};const save=async()=>{try{const result=await api.saveLayout(draft);setLayoutId(result.layout.id||'');await props.refresh();props.notify('ok','Composition saved.')}catch(e:any){props.notify('error',e.message)}}
+  const preset=(name:'full'|'half'|'quad')=>{if(!draft.items.length)return;const items=draft.items.map((item,index)=>{if(name==='full')return{...item,geometry:geometry(wallWidth,wallHeight)};if(name==='half')return{...item,geometry:{type:'px',x:index%2?Math.floor(wallWidth/2):0,y:0,width:Math.floor(wallWidth/2),height:wallHeight}};return{...item,geometry:{type:'px',x:(index%2)*Math.floor(wallWidth/2),y:Math.floor(index/2)*Math.floor(wallHeight/2),width:Math.floor(wallWidth/2),height:Math.floor(wallHeight/2)}}});setDraft({...draft,items})}
+  return <div className="bc-screen compositions-screen"><ScreenTitle title="Compositions Editor" subtitle="Build mixed CTRL + VNC layouts and deploy them to any configured wall." actions={<><select className="bc-compact-select" value={layoutId} onChange={e=>setLayoutId(e.target.value)}><option value="">New composition</option>{props.layouts.map(l=><option key={l.id} value={l.id}>{l.name}</option>)}</select><button className="bc-btn" onClick={()=>{setLayoutId('');setDraft({name:'New Composition',workplaceId:props.currentWorkplaceId,items:[]});setSelectedIndex(-1)}}>{icon('add')} New</button><button className="bc-btn" onClick={()=>void save()}>{icon('save')} Save Composition</button><button className="bc-btn primary" disabled={!draft.id} onClick={async()=>{if(!draft.id)return;try{await api.showLayout(draft.id,draft.workplaceId);props.notify('ok',`Composition deployed to ${wall?.name||'wall'}.`)}catch(e:any){props.notify('error',e.message)}}}>{icon('cast')} Deploy to Wall</button></>} /><div className="composition-layout"><aside className="composition-library bc-panel"><div className="bc-segmented tiny"><button className="active">SOURCES</button><button>WEB</button><button>LAY</button></div><CompositionAdder title="CTRL Sources" values={props.sources} kind="source" onAdd={addItem}/><CompositionAdder title="CTRL Compositions" values={props.compositions} kind="composition" onAdd={addItem}/><CompositionAdder title="Internet / VNC" values={props.externalSources} kind="external" onAdd={addItem}/></aside><section className="composition-stage bc-panel"><div className="composition-ruler"><span>0</span><span>{Math.floor(wallWidth/2)}</span><span>{wallWidth}</span></div><div className="composition-canvas" style={{aspectRatio:`${wallWidth}/${wallHeight}`}}>{draft.items.map((item,index)=><button key={`${item.kind}-${item.id}-${index}`} className={`layout-block ${selectedIndex===index?'active':''} ${item.kind}`} style={{left:`${item.geometry.x/wallWidth*100}%`,top:`${item.geometry.y/wallHeight*100}%`,width:`${item.geometry.width/wallWidth*100}%`,height:`${item.geometry.height/wallHeight*100}%`}} onClick={()=>setSelectedIndex(index)}><span>{item.label||item.id}</span><small>{item.kind}</small></button>)}</div><div className="composition-presets"><span>Preset:</span><button onClick={()=>preset('full')}>Full</button><button onClick={()=>preset('half')}>50/50</button><button onClick={()=>preset('quad')}>2×2</button></div></section><aside className="composition-properties bc-panel"><h3>Properties</h3><label>Composition Name<input value={draft.name} onChange={e=>setDraft({...draft,name:e.target.value})}/></label><label>Destination Wall<select value={draft.workplaceId} onChange={e=>setDraft({...draft,workplaceId:e.target.value})}>{props.workplaces.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}</select></label>{selectedItem?<><label>Selected Content<select value={selectedItem.id} onChange={e=>{const value=valuesFor(selectedItem.kind).find(v=>idOf(v)===e.target.value);patchItem({id:e.target.value,label:labelOf(value)})}}>{valuesFor(selectedItem.kind).map(v=><option key={idOf(v)} value={idOf(v)}>{labelOf(v)}</option>)}</select></label><div className="property-quad"><label>X<input type="number" value={selectedItem.geometry.x} onChange={e=>patchGeometry({x:Number(e.target.value)})}/></label><label>Y<input type="number" value={selectedItem.geometry.y} onChange={e=>patchGeometry({y:Number(e.target.value)})}/></label><label>Width<input type="number" value={selectedItem.geometry.width} onChange={e=>patchGeometry({width:Number(e.target.value)})}/></label><label>Height<input type="number" value={selectedItem.geometry.height} onChange={e=>patchGeometry({height:Number(e.target.value)})}/></label></div><button className="bc-btn danger full" onClick={()=>{setDraft({...draft,items:draft.items.filter((_,i)=>i!==selectedIndex)});setSelectedIndex(-1)}}>{icon('delete')} Remove Element</button></>:<p className="bc-help">Select a block in the canvas to edit its geometry.</p>}{draft.id&&<button className="bc-text-danger" onClick={async()=>{await api.deleteLayout(draft.id!);setLayoutId('');setDraft({name:'New Composition',workplaceId:props.currentWorkplaceId,items:[]});await props.refresh()}}>{icon('delete_forever')} Delete composition</button>}</aside></div></div>
+}
+
+function CompositionAdder({title,values,kind,onAdd}:{title:string;values:any[];kind:LayoutItem['kind'];onAdd:(kind:LayoutItem['kind'],id:string)=>void}){return <div className="composition-palette"><h4>{title}</h4>{values.slice(0,12).map(value=><button key={idOf(value)} onClick={()=>onAdd(kind,idOf(value))}>{icon(kind==='external'?'language':kind==='composition'?'dashboard_customize':'monitor')}<span>{labelOf(value)}</span>{icon('add')}</button>)}</div>}
+
+function DiagnosticsScreen(props:{diagnostics:DiagnosticsResult|null;config:SystemConfig;onRefresh:()=>Promise<void>;notify:(kind:Toast['kind'],message:string)=>void}){const[local,setLocal]=useState<any>(null);const run=async()=>{try{await props.onRefresh();setLocal(await api.localDiagnostics(props.config));props.notify('ok','System diagnostics refreshed.')}catch(e:any){props.notify('error',e.message)}};const cards=props.diagnostics?.checks||[];return <div className="bc-screen diagnostics-screen"><ScreenTitle title="System Diagnosis" subtitle="Real-time health status of core operational modules." actions={<button className="bc-btn primary" onClick={()=>void run()}>{icon('refresh')} Re-check System</button>} /><div className="diagnostic-grid">{cards.map(check=><DiagnosticCard key={check.id} check={check}/>)}</div><section className="bc-panel system-terminal"><div><h3>System Terminal Log</h3><span>{icon('lock')} Read Only</span></div><pre>{cards.map(check=>`[${check.status.toUpperCase()}] ${check.label}: ${check.detail}`).join('\n')||'Waiting for diagnostics…'}{local?`\n[LOCAL] VNC: ${JSON.stringify(local.vnc)}\n[LOCAL] Browsers: ${local.browsers?.map((b:any)=>b.name).join(', ')||'none'}`:''}</pre></section></div>}
+function DiagnosticCard({check}:{check:DiagnosticCheck}){const tone=check.status==='ok'?'ok':check.status==='warn'?'warn':'error';return <article className={`diagnostic-card ${tone}`}><div><small>{check.id}</small>{icon(check.status==='ok'?'check_circle':check.status==='warn'?'warning':'error')}</div><strong>{check.label}</strong><p>{check.detail}</p><span>{check.status.toUpperCase()}</span></article>}
+
+function LogsScreen({routeLogs,cameraLogs}:{routeLogs:LogEntry[];cameraLogs:LogEntry[]}){const[query,setQuery]=useState('');const[module,setModule]=useState('all');const combined=useMemo(()=>[...routeLogs.map(log=>({...log,module:'TOUR_ENGINE'})),...cameraLogs.map(log=>({...log,module:'CAMERAS'}))].sort((a,b)=>b.ts-a.ts),[routeLogs,cameraLogs]);const filtered=combined.filter(log=>(module==='all'||log.module===module)&&log.message.toLowerCase().includes(query.toLowerCase()));return <div className="bc-screen logs-screen"><ScreenTitle title="System Activity Logs" subtitle="Real-time operational auditing and system events." actions={<button className="bc-btn">{icon('download')} Export CSV</button>} /><section className="bc-panel logs-panel"><div className="logs-filter"><div className="bc-search">{icon('search')}<input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search messages…" /></div><label>Module<select value={module} onChange={e=>setModule(e.target.value)}><option value="all">All Modules</option><option value="TOUR_ENGINE">Tour Engine</option><option value="CAMERAS">Cameras</option></select></label><label className="live-toggle"><span>Live Tail</span><input type="checkbox" defaultChecked /></label></div><LogsTable logs={filtered} showModule /></section></div>}
+
+function LogsTable({logs,compact=false,showModule=false}:{logs:Array<LogEntry&{module?:string}>;compact?:boolean;showModule?:boolean}){return <div className={`bc-log-table ${compact?'compact':''}`}><div className="bc-log-head"><span>Timestamp</span>{showModule&&<span>Module</span>}<span>Level</span><span>Message Details</span></div>{logs.length?logs.map((log,index)=><div className="bc-log-row" key={`${log.ts}-${index}`}><span>{new Date(log.ts*1000).toLocaleString()}</span>{showModule&&<span>{log.module}</span>}<span><b className={`log-level ${log.level}`}>{log.level}</b></span><span>{log.message}</span></div>):<div className="bc-empty-row">No activity records.</div>}</div>}
+
+function ConfigurationScreen(props:{config:SystemConfig;sources:any[];onSaved:()=>void;notify:(kind:Toast['kind'],message:string)=>void}){
+  const[draft,setDraft]=useState<SystemConfig>(JSON.parse(JSON.stringify(props.config)));const[browsers,setBrowsers]=useState<Array<{name:string;path:string}>>([]);const[detectedWorkplaces,setDetectedWorkplaces]=useState<any[]>(props.config.workplaces||[]);const[detectedSources,setDetectedSources]=useState<any[]>(props.sources);const[ctrlUser,setCtrlUser]=useState('');const[ctrlPassword,setCtrlPassword]=useState('');const[selectedWall,setSelectedWall]=useState(0);const[busy,setBusy]=useState(false);useEffect(()=>{api.setupBrowsers().then(setBrowsers).catch(()=>{})},[]);const renderer=draft.renderers[0]||defaultRenderer();const wall=draft.workplaces[selectedWall];const setRenderer=(patch:Partial<SystemConfig['renderers'][number]>)=>setDraft({...draft,renderers:[{...renderer,...patch},...draft.renderers.slice(1)]});const patchWall=(patch:Partial<Workplace>)=>{const walls=[...draft.workplaces];walls[selectedWall]={...walls[selectedWall],...patch};setDraft({...draft,workplaces:walls})};const patchWallGeometry=(patch:Partial<NonNullable<Workplace['geometry']>>)=>wall&&patchWall({geometry:{...(wall.geometry||geometry()),...patch}})
+  const discover=async()=>{setBusy(true);try{const result=await api.discoverSetup(draft,ctrlUser,ctrlPassword,wall?.id||'');setDetectedWorkplaces(result.workplaces);setDetectedSources(result.sources);setCtrlPassword('');if(result.warnings?.length)props.notify('warn',result.warnings.join(' | '));else props.notify('ok',`${result.workplaces.length} CTRL workplaces detected.`)}catch(e:any){props.notify('error',e.message)}finally{setBusy(false)}}
+  const addWall=()=>{const configured=new Set(draft.workplaces.map(w=>w.id));const candidate=detectedWorkplaces.find(w=>!configured.has(idOf(w)));const next:Workplace={id:idOf(candidate),name:candidate?labelOf(candidate):`Secondary Wall ${draft.workplaces.length}`,role:'secondary',geometry:geometry()};setDraft({...draft,workplaces:[...draft.workplaces,next]});setSelectedWall(draft.workplaces.length)}
+  const makePrimary=()=>{if(!wall)return;const walls:Workplace[]=draft.workplaces.map((item,index)=>({...item,role:index===selectedWall?'primary':'secondary'}));const chosen=walls.splice(selectedWall,1)[0];setDraft({...draft,workplaces:[chosen,...walls]});setSelectedWall(0)}
+  const removeWall=()=>{if(!wall||draft.workplaces.length<=1)return;const walls=draft.workplaces.filter((_,index)=>index!==selectedWall);if(!walls.some(w=>roleOf(w)==='primary'))walls[0]={...walls[0],role:'primary'};setDraft({...draft,workplaces:walls});setSelectedWall(Math.max(0,selectedWall-1))};const sortedSources=[...detectedSources].sort((a,b)=>Number(looksLikeVnc(b))-Number(looksLikeVnc(a)))
+  return <div className="bc-screen settings-screen"><ScreenTitle title="System Configuration" subtitle="Manage connection endpoints and service parameters." /><div className="settings-columns"><section className="settings-card bc-panel"><h3>{icon('dns')} CTRL Server <span className="bc-dot ok"/></h3><div className="settings-grid-two"><label>IP Address / URL<input value={draft.barco.base_url} onChange={e=>setDraft({...draft,barco:{...draft.barco,base_url:e.target.value}})}/></label><label>API Base<input value={draft.barco.api_base} onChange={e=>setDraft({...draft,barco:{...draft.barco,api_base:e.target.value}})}/></label></div><label>Realm<input value={draft.barco.oidc.realm} onChange={e=>setDraft({...draft,barco:{...draft.barco,oidc:{...draft.barco.oidc,realm:e.target.value}}})}/></label><label>Client ID<input value={draft.barco.oidc.client_id} onChange={e=>setDraft({...draft,barco:{...draft.barco,oidc:{...draft.barco.oidc,client_id:e.target.value}}})}/></label><div className="settings-grid-two"><label>Temporary User<input value={ctrlUser} onChange={e=>setCtrlUser(e.target.value)}/></label><label>Temporary Password<input type="password" value={ctrlPassword} onChange={e=>setCtrlPassword(e.target.value)}/></label></div><button className="bc-outline-red" disabled={busy} onClick={()=>void discover()}>{busy?'Detecting…':'Test / Discover Connection'}</button></section><section className="settings-card bc-panel"><h3>{icon('desktop_windows')} Workplaces / Walls <span className="bc-dot ok"/></h3><div className="wall-manager"><div className="wall-list">{draft.workplaces.map((item,index)=><button key={`${item.id}-${index}`} className={selectedWall===index?'active':''} onClick={()=>setSelectedWall(index)}><span>{roleOf(item)==='primary'?icon('star'):icon('desktop_windows')}</span><div><strong>{item.name}</strong><small>{roleOf(item)==='primary'?'Principal':'Secundario'} · {item.id||'ID pendiente'}</small></div></button>)}<button className="add-wall" onClick={addWall}>{icon('add')} Agregar wall secundario</button></div>{wall&&<div className="wall-editor"><label>Nombre<input value={wall.name} onChange={e=>patchWall({name:e.target.value})}/></label><label>CTRL Workplace<select value={wall.id} onChange={e=>{const selected=detectedWorkplaces.find(v=>idOf(v)===e.target.value);patchWall({id:e.target.value,name:selected?labelOf(selected):wall.name})}}><option value="">Selecciona o escribe ID manualmente</option>{detectedWorkplaces.map(item=><option key={idOf(item)} value={idOf(item)}>{labelOf(item)}</option>)}</select></label>{!detectedWorkplaces.some(v=>idOf(v)===wall.id)&&<label>Workplace ID<input value={wall.id} onChange={e=>patchWall({id:e.target.value})}/></label>}<div className="property-quad"><label>X<input type="number" value={wall.geometry?.x||0} onChange={e=>patchWallGeometry({x:Number(e.target.value)})}/></label><label>Y<input type="number" value={wall.geometry?.y||0} onChange={e=>patchWallGeometry({y:Number(e.target.value)})}/></label><label>Width<input type="number" value={wall.geometry?.width||1920} onChange={e=>patchWallGeometry({width:Number(e.target.value)})}/></label><label>Height<input type="number" value={wall.geometry?.height||1080} onChange={e=>patchWallGeometry({height:Number(e.target.value)})}/></label></div><div className="wall-editor-actions">{roleOf(wall)!=='primary'&&<button className="bc-btn" onClick={makePrimary}>{icon('star')} Make Principal</button>}{draft.workplaces.length>1&&<button className="bc-btn danger" onClick={removeWall}>{icon('delete')} Remove Wall</button>}</div></div>}</div></section><section className="settings-card bc-panel"><h3>{icon('language')} Renderer / VNC</h3><label>CTRL VNC Source<select value={renderer.barco_source_id} onChange={e=>{const source=sortedSources.find(v=>idOf(v)===e.target.value);setRenderer({barco_source_id:e.target.value,barco_source_label:labelOf(source)})}}><option value="">Select VNC source…</option>{sortedSources.map(source=><option key={idOf(source)} value={idOf(source)}>{labelOf(source)}{looksLikeVnc(source)?' · VNC':''}</option>)}</select></label><div className="settings-grid-two"><label>VNC Host<input value={renderer.vnc_host} onChange={e=>setRenderer({vnc_host:e.target.value})}/></label><label>VNC Port<input type="number" value={renderer.vnc_port} onChange={e=>setRenderer({vnc_port:Number(e.target.value)})}/></label></div><label>Browser<select value={renderer.browser_path} onChange={e=>setRenderer({browser_path:e.target.value})}><option value="">Auto-detect</option>{browsers.map(browser=><option key={browser.path} value={browser.path}>{browser.name}</option>)}</select></label><div className="settings-grid-two"><label>Launch Mode<select value={renderer.launch_mode} onChange={e=>setRenderer({launch_mode:e.target.value as any})}><option value="kiosk">Kiosk</option><option value="fullscreen">Fullscreen</option><option value="app">App</option></select></label><label>Startup Delay<input type="number" step="0.5" value={renderer.startup_delay_sec} onChange={e=>setRenderer({startup_delay_sec:Number(e.target.value)})}/></label></div></section><section className="settings-card bc-panel"><h3>{icon('lan')} Local Service</h3><div className="settings-grid-two"><label>Bind Host<input value={draft.server.host} onChange={e=>setDraft({...draft,server:{...draft.server,host:e.target.value}})}/></label><label>Port<input type="number" value={draft.server.port} onChange={e=>setDraft({...draft,server:{...draft.server,port:Number(e.target.value)}})}/></label></div><label className="bc-toggle-row"><input type="checkbox" checked={draft.barco.tls.verify_tls} onChange={e=>setDraft({...draft,barco:{...draft.barco,tls:{verify_tls:e.target.checked}}})}/><span>Verify CTRL TLS certificate</span></label><p className="bc-help">Host and port changes apply after restart. Wall destinations are applied immediately after saving and logging back in.</p></section></div><div className="settings-footer"><span>Unsaved changes are stored only when you press Save.</span><div><button className="bc-btn" onClick={()=>setDraft(JSON.parse(JSON.stringify(props.config)))}>Discard</button><button className="bc-btn primary" onClick={async()=>{try{await api.saveSetup(draft);props.notify('ok','Configuration saved. Sign in again to reload destinations.');props.onSaved()}catch(e:any){props.notify('error',e.message)}}}>{icon('save')} Save All Changes</button></div></div></div>
+}
+
+function SetupWizard({onConfigured,notify}:{onConfigured:()=>void;notify:(kind:Toast['kind'],message:string)=>void}){
+  const[config,setConfig]=useState<SystemConfig|null>(null);const[step,setStep]=useState(1);const[username,setUsername]=useState('');const[password,setPassword]=useState('');const[inventory,setInventory]=useState<any[]>([]);const[sources,setSources]=useState<any[]>([]);const[busy,setBusy]=useState(false);useEffect(()=>{api.setupConfig().then(setConfig).catch(e=>notify('error',e.message))},[]);if(!config)return <Splash/>;const primary=config.workplaces[0]||{id:'',name:'Wall principal',role:'primary' as const,geometry:geometry(3840,2160)};const renderer=config.renderers[0]||defaultRenderer();const patchPrimary=(patch:Partial<Workplace>)=>setConfig({...config,workplaces:[{...primary,...patch},...config.workplaces.slice(1)]});const patchRenderer=(patch:Partial<SystemConfig['renderers'][number]>)=>setConfig({...config,renderers:[{...renderer,...patch},...config.renderers.slice(1)]});const discover=async()=>{setBusy(true);try{const result=await api.discoverSetup(config,username,password,primary.id);setInventory(result.workplaces);setSources(result.sources);const id=primary.id||result.selectedWorkplaceId||idOf(result.workplaces[0]);const found=result.workplaces.find(w=>idOf(w)===id);if(id)patchPrimary({id,name:found?labelOf(found):primary.name,role:'primary'});setPassword('');notify('ok',`CTRL detected: ${result.workplaces.length} workplaces.`);setStep(4)}catch(e:any){notify('error',e.message)}finally{setBusy(false)}};const progress=Math.round(step/7*100)
+  return <div className="bc-setup-page"><header><div className="bc-top-brand">Barco Controller</div><div><small>System Initialization</small><b>{progress}%</b></div></header><div className="setup-progress"><i style={{width:`${progress}%`}}/></div><div className="setup-steps">{['Welcome','CTRL','Authentication','Walls','Renderer','Diagnostics','Finalize'].map((label,index)=><span className={step>=index+1?'active':''} key={label}><i/>{label}</span>)}</div><main className="setup-main">{step===1&&<SetupCard title="Barco Controller" subtitle="Mission-critical operations suite for CTRL video walls." iconName="developer_board"><p>Este asistente configura el servidor CTRL, el wall principal y el renderer VNC. Los walls secundarios como Sala de crisis u Oficina se pueden agregar en Configuration después de entrar.</p><button className="bc-btn primary" onClick={()=>setStep(2)}>Begin Setup {icon('arrow_forward')}</button></SetupCard>}{step===2&&<SetupCard title="CTRL Server" subtitle="Connect the controller to your Barco CTRL system." iconName="dns"><label>CTRL URL<input value={config.barco.base_url} onChange={e=>setConfig({...config,barco:{...config.barco,base_url:e.target.value}})} placeholder="https://CTRL-IP" /></label><div className="settings-grid-two"><label>Realm<input value={config.barco.oidc.realm} onChange={e=>setConfig({...config,barco:{...config.barco,oidc:{...config.barco.oidc,realm:e.target.value}}})}/></label><label>Client ID<input value={config.barco.oidc.client_id} onChange={e=>setConfig({...config,barco:{...config.barco,oidc:{...config.barco.oidc,client_id:e.target.value}}})}/></label></div><button className="bc-btn primary" onClick={()=>setStep(3)}>Continue {icon('arrow_forward')}</button></SetupCard>}{step===3&&<SetupCard title="Authentication & Inventory" subtitle="Credentials are used only to discover CTRL inventory and are not stored." iconName="lock"><label>Username<input value={username} onChange={e=>setUsername(e.target.value)}/></label><label>Password<input type="password" value={password} onChange={e=>setPassword(e.target.value)}/></label><button className="bc-btn primary" disabled={busy} onClick={()=>void discover()}>{busy?'Scanning…':'Authenticate & Scan'}</button></SetupCard>}{step===4&&<SetupCard title="Wall Assignment" subtitle="Choose the primary wall. Additional destinations can be added later." iconName="desktop_windows"><label>Primary Workplace<select value={primary.id} onChange={e=>{const found=inventory.find(w=>idOf(w)===e.target.value);patchPrimary({id:e.target.value,name:labelOf(found),role:'primary'})}}><option value="">Select…</option>{inventory.map(w=><option key={idOf(w)} value={idOf(w)}>{labelOf(w)}</option>)}</select></label><label>Display Name<input value={primary.name} onChange={e=>patchPrimary({name:e.target.value})}/></label><div className="property-quad"><label>X<input type="number" value={primary.geometry?.x||0} onChange={e=>patchPrimary({geometry:{...(primary.geometry||geometry()),x:Number(e.target.value)}})}/></label><label>Y<input type="number" value={primary.geometry?.y||0} onChange={e=>patchPrimary({geometry:{...(primary.geometry||geometry()),y:Number(e.target.value)}})}/></label><label>Width<input type="number" value={primary.geometry?.width||3840} onChange={e=>patchPrimary({geometry:{...(primary.geometry||geometry()),width:Number(e.target.value)}})}/></label><label>Height<input type="number" value={primary.geometry?.height||2160} onChange={e=>patchPrimary({geometry:{...(primary.geometry||geometry()),height:Number(e.target.value)}})}/></label></div><button className="bc-btn primary" onClick={()=>setStep(5)}>Continue</button></SetupCard>}{step===5&&<SetupCard title="Renderer VNC" subtitle="Associate the local renderer PC with a VNC source already configured in CTRL." iconName="language"><label>CTRL VNC Source<select value={renderer.barco_source_id} onChange={e=>{const source=sources.find(s=>idOf(s)===e.target.value);patchRenderer({barco_source_id:e.target.value,barco_source_label:labelOf(source)})}}><option value="">Select VNC source…</option>{[...sources].sort((a,b)=>Number(looksLikeVnc(b))-Number(looksLikeVnc(a))).map(s=><option key={idOf(s)} value={idOf(s)}>{labelOf(s)}{looksLikeVnc(s)?' · VNC':''}</option>)}</select></label><div className="settings-grid-two"><label>VNC Host<input value={renderer.vnc_host} onChange={e=>patchRenderer({vnc_host:e.target.value})}/></label><label>VNC Port<input type="number" value={renderer.vnc_port} onChange={e=>patchRenderer({vnc_port:Number(e.target.value)})}/></label></div><button className="bc-btn primary" onClick={()=>setStep(6)}>Continue</button></SetupCard>}{step===6&&<SetupCard title="Preflight Check" subtitle="Validate configuration before saving." iconName="medical_services"><div className="setup-check-list"><span>{icon('check_circle')} CTRL URL configured</span><span>{icon(primary.id?'check_circle':'error')} Primary wall selected</span><span>{icon(renderer.barco_source_id?'check_circle':'warning')} VNC renderer source selected</span></div><button className="bc-btn primary" onClick={async()=>{try{await api.testSetup(config);setStep(7);notify('ok','Preflight completed.')}catch(e:any){notify('error',e.message)}}}>Run Preflight</button></SetupCard>}{step===7&&<SetupCard title="Initialization Complete" subtitle="Save the configuration and start Barco Controller." iconName="verified"><div className="setup-summary"><div><small>CTRL</small><strong>{config.barco.base_url}</strong></div><div><small>Primary Wall</small><strong>{primary.name}</strong></div><div><small>Renderer</small><strong>{renderer.barco_source_label||renderer.barco_source_id}</strong></div></div><button className="bc-btn primary" onClick={async()=>{try{await api.saveSetup(config);notify('ok','Configuration saved.');onConfigured()}catch(e:any){notify('error',e.message)}}}>Save & Launch</button></SetupCard>}</main></div>
+}
+
+function SetupCard({title,subtitle,iconName,children}:{title:string;subtitle:string;iconName:string;children:ReactNode}){return <section className="setup-card"><div className="setup-card-icon">{icon(iconName)}</div><div className="setup-card-head"><h1>{title}</h1><p>{subtitle}</p></div><div className="setup-card-body">{children}</div></section>}
+function EmptyState({iconName,title,action}:{iconName:string;title:string;action?:ReactNode}){return <div className="bc-empty-state">{icon(iconName)}<h3>{title}</h3>{action}</div>}
+function describeContent(value:any):string{if(!value)return'';if(Array.isArray(value))return value.map(describeContent).filter(Boolean).join(', ');if(typeof value==='string')return value;if(typeof value==='object'){const label=value.label||value.name||value.title;if(label)return String(label);const content=value.content;if(Array.isArray(content))return content.map(describeContent).filter(Boolean).join(', ');if(content)return describeContent(content);const items=value.items||value.data||value.value;if(Array.isArray(items))return items.map(describeContent).filter(Boolean).join(', ');if(value.id)return String(value.id)}return''}
