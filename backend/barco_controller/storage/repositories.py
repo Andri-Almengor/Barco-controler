@@ -16,6 +16,30 @@ def normalize_route_item(item: dict[str, Any]) -> dict[str, str]:
     return {"kind": kind, "id": item_id, "label": str(item.get("label") or "")}
 
 
+def normalize_layout_geometry(value: Any) -> dict[str, Any]:
+    geometry = value if isinstance(value, dict) else {}
+    return {
+        "type": str(geometry.get("type") or "px"),
+        "x": int(geometry.get("x") or 0),
+        "y": int(geometry.get("y") or 0),
+        "width": max(1, int(geometry.get("width") or 640)),
+        "height": max(1, int(geometry.get("height") or 360)),
+    }
+
+
+def normalize_layout_item(item: dict[str, Any]) -> dict[str, Any]:
+    kind = str(item.get("kind") or "source").strip().lower()
+    if kind not in {"composition", "source", "external"}:
+        kind = "source"
+    item_id = str(item.get("id") or item.get("sourceId") or item.get("compositionId") or item.get("externalId") or "").strip()
+    return {
+        "kind": kind,
+        "id": item_id,
+        "label": str(item.get("label") or ""),
+        "geometry": normalize_layout_geometry(item.get("geometry")),
+    }
+
+
 class RouteRepository:
     def __init__(self, store: JsonStore):
         self.store = store
@@ -160,3 +184,39 @@ class ExternalSourceRepository:
 
     def delete(self, source_id: str) -> None:
         self.store.write([item for item in self.list() if str(item.get("id")) != str(source_id)])
+
+
+class LayoutRepository:
+    def __init__(self, store: JsonStore):
+        self.store = store
+
+    def list(self) -> list[dict[str, Any]]:
+        value = self.store.read()
+        return value if isinstance(value, list) else []
+
+    def get(self, layout_id: str) -> dict[str, Any] | None:
+        return next((item for item in self.list() if str(item.get("id")) == str(layout_id)), None)
+
+    def save(self, body: dict[str, Any]) -> dict[str, Any]:
+        layouts = self.list()
+        layout_id = str(body.get("id") or uuid.uuid4())
+        items = body.get("items") or []
+        if not isinstance(items, list):
+            raise ValueError("items debe ser una lista")
+        normalized = [normalize_layout_item(item) for item in items if isinstance(item, dict)]
+        if any(not item["id"] for item in normalized):
+            raise ValueError("Todos los elementos del layout deben tener id")
+        layout = {
+            "id": layout_id,
+            "name": str(body.get("name") or "Composición mixta").strip() or "Composición mixta",
+            "workplaceId": str(body.get("workplaceId") or "").strip(),
+            "items": normalized,
+            "updatedAt": int(time.time()),
+        }
+        layouts = [entry for entry in layouts if str(entry.get("id")) != layout_id]
+        layouts.insert(0, layout)
+        self.store.write(layouts)
+        return layout
+
+    def delete(self, layout_id: str) -> None:
+        self.store.write([item for item in self.list() if str(item.get("id")) != str(layout_id)])
