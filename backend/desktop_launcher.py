@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import os
 import socket
 import threading
@@ -46,7 +47,6 @@ def _close_mutex_handle() -> None:
 
 
 def _try_acquire_windows_mutex() -> bool:
-    """Try to own the single-instance mutex without trusting a stale instance."""
     global _MUTEX_HANDLE
     if os.name != "nt":
         return True
@@ -74,6 +74,17 @@ def _normalize_bind_host(value: str) -> str:
     return host
 
 
+def _effective_bind_host(server_cfg: dict[str, Any]) -> str:
+    """Use all IPv4 interfaces when LAN access is enabled.
+
+    The configured host remains available for advanced/local-only deployments,
+    while lan_access=True provides the normal same-network operation mode.
+    """
+    if bool(server_cfg.get("lan_access", True)):
+        return "0.0.0.0"
+    return _normalize_bind_host(str(server_cfg.get("host") or "127.0.0.1"))
+
+
 def _probe_hosts(bind_host: str) -> list[str]:
     host = _normalize_bind_host(bind_host)
     if host in {"0.0.0.0", "::", "[::]"}:
@@ -89,6 +100,39 @@ def _ui_url(host: str, port: int) -> str:
     if ":" in display_host and not display_host.startswith("["):
         display_host = f"[{display_host}]"
     return f"http://{display_host}:{port}"
+
+
+def _lan_ipv4_addresses() -> list[str]:
+    """Return private/link-local IPv4 addresses suitable for opening the UI from LAN clients."""
+    values: set[str] = set()
+
+    try:
+        hostname = socket.gethostname()
+        for info in socket.getaddrinfo(hostname, None, socket.AF_INET, socket.SOCK_STREAM):
+            candidate = str(info[4][0])
+            try:
+                addr = ipaddress.ip_address(candidate)
+                if not addr.is_loopback and (addr.is_private or addr.is_link_local):
+                    values.add(candidate)
+            except ValueError:
+                pass
+    except Exception:
+        pass
+
+    # A UDP connect does not send application data; it simply asks Windows which
+    # local interface would be used for a normal routed connection.
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(0.4)
+            sock.connect(("8.8.8.8", 80))
+            candidate = str(sock.getsockname()[0])
+            addr = ipaddress.ip_address(candidate)
+            if not addr.is_loopback and (addr.is_private or addr.is_link_local):
+                values.add(candidate)
+    except Exception:
+        pass
+
+    return sorted(values)
 
 
 def _is_existing_instance(bind_host: str, port: int) -> bool:
@@ -150,7 +194,7 @@ def _tray_image() -> Image.Image:
     return image
 
 
-def _run_tray(server: Any, ui: str) -> None:
+def _run_tray(server: Any, ui: str, lan_urls: list[str]) -> None:
     try:
         import pystray
     except Exception as exc:
@@ -161,6 +205,12 @@ def _run_tray(server: Any, ui: str) -> None:
     def open_ui(icon=None, item=None):
         webbrowser.open(ui, new=2)
 
+    def open_lan(icon=None, item=None):
+        if lan_urls:
+            webbrowser.open(lan_urls[0], new=2)
+        else:
+            webbrowser.open(ui, new=2)
+
     def exit_app(icon, item=None):
         try:
             server.close()
@@ -169,14 +219,16 @@ def _run_tray(server: Any, ui: str) -> None:
         _close_mutex_handle()
         icon.stop()
 
+    menu_items = [pystray.MenuItem("Abrir Barco Controller", open_ui, default=True)]
+    if lan_urls:
+        menu_items.append(pystray.MenuItem(f"Abrir URL LAN ({lan_urls[0]})", open_lan))
+    menu_items.append(pystray.MenuItem("Salir", exit_app))
+
     icon = pystray.Icon(
         "barco-controller",
         _tray_image(),
         APP_TITLE,
-        menu=pystray.Menu(
-            pystray.MenuItem("Abrir Barco Controller", open_ui, default=True),
-            pystray.MenuItem("Salir", exit_app),
-        ),
+        menu=pystray.Menu(*menu_items),
     )
     icon.run()
 
@@ -185,7 +237,8 @@ def main() -> None:
     ensure_runtime_dirs()
     cfg = load_config_or_default()
     server_cfg = cfg.get("server") or {}
-    host = _normalize_bind_host(str(server_cfg.get("host") or "127.0.0.1"))
+    host = _effective_bind_host(server_cfg)
+    lan_access = bool(server_cfg.get("lan_access", True))
     try:
         port = int(server_cfg.get("port") or 8080)
     except Exception:
@@ -195,7 +248,11 @@ def main() -> None:
 
     ui_host = _probe_hosts(host)[0]
     ui = _ui_url(ui_host, port)
-    _write_launcher_log(f"Inicio solicitado. bind_host={host} port={port} ui={ui}")
+    lan_urls = [f"http://{address}:{port}" for address in _lan_ipv4_addresses()] if lan_access else []
+    _write_launcher_log(
+        f"Inicio solicitado. bind_host={host} port={port} ui={ui} "
+        f"lan_access={lan_access} lan_urls={','.join(lan_urls) if lan_urls else 'none'}"
+    )
 
     instance_state = _wait_for_mutex_or_existing_instance(host, port)
     if instance_state == "existing":
@@ -227,7 +284,7 @@ def main() -> None:
     def run_server() -> None:
         try:
             server.run()
-        except BaseException as exc:  # Keep the real Waitress failure for the launcher thread.
+        except BaseException as exc:
             server_error.append(exc)
             _write_launcher_log(f"ERROR SERVIDOR HTTP: {exc}\n{traceback.format_exc()}")
 
@@ -248,11 +305,13 @@ def main() -> None:
             f"Revisa {LOG_DIR / 'launcher.log'} para ver el diagnóstico de arranque."
         )
 
+    if lan_urls:
+        _write_launcher_log("Acceso LAN disponible: " + ", ".join(lan_urls))
     _write_launcher_log(f"Servidor listo en {ui}; abriendo navegador.")
     webbrowser.open(ui, new=2)
 
     try:
-        _run_tray(server, ui)
+        _run_tray(server, ui, lan_urls)
     finally:
         _close_mutex_handle()
 
