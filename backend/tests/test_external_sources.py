@@ -28,5 +28,15 @@ class ExternalSourceRepositoryTest(unittest.TestCase):
         item=normalize_route_item({'kind':'external','id':'abc','label':'Web'})
         self.assertEqual(item['kind'],'external')
         self.assertEqual(item['id'],'abc')
+    def test_browser_launch_forces_new_maximized_window(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo=ExternalSourceRepository(JsonStore(Path(td)/'external.json'))
+            svc=ExternalRendererService(repo, {'renderers':[]})
+            renderer={'profile_dir':str(Path(td)/'profile'),'launch_mode':'kiosk','extra_args':[]}
+            args=svc._args('chrome.exe', renderer, 'https://example.com')
+            self.assertIn('--new-window', args)
+            self.assertIn('--start-maximized', args)
+            self.assertIn('--window-position=0,0', args)
+            self.assertIn('--kiosk', args)
 
 if __name__=='__main__': unittest.main()
