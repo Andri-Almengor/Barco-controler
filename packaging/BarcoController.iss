@@ -1,5 +1,5 @@
 #define MyAppName "Barco Controller"
-#define MyAppVersion "0.7.1"
+#define MyAppVersion "0.7.2"
 #define MyAppPublisher "Andri-Almengor"
 #define MyAppExeName "BarcoController.exe"
 
@@ -9,7 +9,7 @@
 AppId={{25DF5D40-59C9-4DFD-8C2B-52E1F7EA77B0}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
-VersionInfoVersion=0.7.1.0
+VersionInfoVersion=0.7.2.0
 AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\Barco Controller
 DefaultGroupName=Barco Controller
