@@ -36,6 +36,7 @@ export type SystemConfig = {
 }
 export type SetupStatus = { configured: boolean; configError?: string | null; remoteSetupEnabled?: boolean }
 export type DiscoveryResult = { ok: boolean; authMode: 'temporary' | 'existing-session'; selectedWorkplaceId: string; workplaces: any[]; sources: any[]; compositions: any[]; warnings: string[] }
+export type ConfigSaveResult = { ok: boolean; persisted: boolean; config: SystemConfig; sessionPreserved: boolean; restartRequiredForServerBinding: boolean }
 export type DiagnosticCheck = { id: string; label: string; status: 'ok' | 'warn' | 'error'; detail: string; meta?: Record<string, any> }
 export type DiagnosticsResult = {
   ready: boolean; time: number; checks: DiagnosticCheck[]; vnc: Record<string, any>;
@@ -67,7 +68,7 @@ export const api = {
   setupBrowsers: () => request<Array<{ name: string; path: string }>>('/api/setup/browsers'),
   testSetup: (config: SystemConfig) => request<{ ok: boolean; issuer?: string; tokenEndpoint?: string }>('/api/setup/test', { method: 'POST', body: JSON.stringify({ config }) }),
   discoverSetup: (config: SystemConfig | null, username = '', password = '', workplaceId = '') => request<DiscoveryResult>('/api/setup/discover', { method: 'POST', body: JSON.stringify({ config, username, password, workplaceId }) }),
-  saveSetup: (config: SystemConfig) => request<{ ok: boolean; config: SystemConfig; restartRequiredForServerBinding: boolean }>('/api/setup/config', { method: 'POST', body: JSON.stringify({ config }) }),
+  saveSetup: (config: SystemConfig) => request<ConfigSaveResult>('/api/setup/config', { method: 'POST', body: JSON.stringify({ config }) }),
   diagnostics: () => request<DiagnosticsResult>('/api/diagnostics'),
   localDiagnostics: (config: SystemConfig) => request<LocalDiagnostics>('/api/diagnostics/local', { method: 'POST', body: JSON.stringify({ config }) }),
 
