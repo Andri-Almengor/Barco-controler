@@ -102,7 +102,10 @@ class StateManager:
             with self._lock:
                 self._error = str(exc)
                 self._last_session_preserved = False
-                self._state = None
+                # When a live runtime already exists, keep it available until the
+                # caller restores/fixes the persisted configuration. This avoids
+                # destroying the active operator session on a failed Save.
+                self._state = previous
             if silent:
                 return False
             raise
