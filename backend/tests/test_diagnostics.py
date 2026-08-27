@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import socket
+import subprocess
 import threading
 import unittest
 
@@ -43,6 +45,16 @@ class DiagnosticsTests(unittest.TestCase):
         result = DiagnosticsService.inspect_vnc("127.0.0.1", port, timeout=0.1)
         self.assertFalse(result["reachable"])
         self.assertIsNone(result["protocol"])
+
+    def test_windows_diagnostic_helpers_are_created_without_console(self):
+        if os.name != "nt":
+            self.skipTest("Windows-only process flags")
+        kwargs = DiagnosticsService._hidden_process_kwargs()
+        self.assertIn("startupinfo", kwargs)
+        self.assertIn("creationflags", kwargs)
+        self.assertTrue(kwargs["creationflags"] & subprocess.CREATE_NO_WINDOW)
+        self.assertTrue(kwargs["startupinfo"].dwFlags & subprocess.STARTF_USESHOWWINDOW)
+        self.assertEqual(kwargs["startupinfo"].wShowWindow, subprocess.SW_HIDE)
 
 
 if __name__ == "__main__":
