@@ -465,11 +465,28 @@ function ConfigurationScreen(props: { config: SystemConfig; sources: any[]; onSa
   const [selectedWall, setSelectedWall] = useState(0)
   const [busy, setBusy] = useState(false)
   const [advancedBinding, setAdvancedBinding] = useState(false)
+  const [wallJustAdded, setWallJustAdded] = useState(false)
+
   useEffect(() => { api.setupBrowsers().then(setBrowsers).catch(() => {}) }, [])
+  useEffect(() => {
+    if (selectedWall >= draft.workplaces.length && draft.workplaces.length) setSelectedWall(draft.workplaces.length - 1)
+  }, [draft.workplaces.length, selectedWall])
+
   const renderer = draft.renderers[0] || defaultRenderer()
   const wall = draft.workplaces[selectedWall]
-  const setRenderer = (patch: Partial<SystemConfig['renderers'][number]>) => setDraft({ ...draft, renderers: [{ ...renderer, ...patch }, ...draft.renderers.slice(1)] })
-  const patchWall = (patch: Partial<Workplace>) => { const walls = [...draft.workplaces]; walls[selectedWall] = { ...walls[selectedWall], ...patch }; setDraft({ ...draft, workplaces: walls }) }
+  const setRenderer = (patch: Partial<SystemConfig['renderers'][number]>) => setDraft(current => ({ ...current, renderers: [{ ...renderer, ...patch }, ...current.renderers.slice(1)] }))
+  const patchWall = (patch: Partial<Workplace>) => {
+    setDraft(current => {
+      const walls = [...current.workplaces]
+      if (!walls[selectedWall]) return current
+      walls[selectedWall] = { ...walls[selectedWall], ...patch }
+      return { ...current, workplaces: walls }
+    })
+  }
+  const patchWallGeometry = (patch: Partial<NonNullable<Workplace['geometry']>>) => {
+    if (!wall) return
+    patchWall({ geometry: { ...(wall.geometry || fullGeometry()), ...patch } })
+  }
 
   async function discover() {
     setBusy(true)
@@ -484,15 +501,70 @@ function ConfigurationScreen(props: { config: SystemConfig; sources: any[]; onSa
   }
 
   function addWall() {
-    const configured = new Set(draft.workplaces.map(value => value.id))
-    const candidate = detectedWorkplaces.find(value => !configured.has(idOf(value)))
-    const next: Workplace = { id: idOf(candidate), name: candidate ? labelOf(candidate) : `Secondary Wall ${draft.workplaces.length}`, role: 'secondary', geometry: fullGeometry() }
-    setDraft({ ...draft, workplaces: [...draft.workplaces, next] })
+    const next: Workplace = {
+      id: '',
+      name: `Wall secundario ${draft.workplaces.length + 1}`,
+      role: 'secondary',
+      geometry: { type: 'px', x: 0, y: 0, width: 1920, height: 1080 },
+    }
+    setDraft(current => ({ ...current, workplaces: [...current.workplaces, next] }))
     setSelectedWall(draft.workplaces.length)
+    setWallJustAdded(true)
+  }
+
+  function selectDetectedWorkplace(id: string) {
+    const selected = detectedWorkplaces.find(value => idOf(value) === id)
+    patchWall({
+      id,
+      name: selected && (wallJustAdded || !wall?.name.trim()) ? labelOf(selected) : wall?.name || labelOf(selected),
+    })
+  }
+
+  function makePrimary() {
+    if (!wall) return
+    const walls: Workplace[] = draft.workplaces.map((value,index) => ({ ...value, role: index === selectedWall ? 'primary' : 'secondary' }))
+    const chosen = walls.splice(selectedWall, 1)[0]
+    setDraft({ ...draft, workplaces: [chosen, ...walls] })
+    setSelectedWall(0)
+    setWallJustAdded(false)
+  }
+
+  function removeWall() {
+    if (!wall || draft.workplaces.length <= 1) return
+    const walls = draft.workplaces.filter((_,index) => index !== selectedWall)
+    if (!walls.some(value => roleOf(value) === 'primary')) walls[0] = { ...walls[0], role: 'primary' }
+    setDraft({ ...draft, workplaces: walls })
+    setSelectedWall(Math.max(0, selectedWall - 1))
+    setWallJustAdded(false)
+  }
+
+  function validateWalls() {
+    if (!draft.workplaces.length) return 'Debe existir al menos un wall configurado.'
+    const missingName = draft.workplaces.find(value => !String(value.name || '').trim())
+    if (missingName) return 'Todos los walls deben tener un nombre.'
+    const missingId = draft.workplaces.find(value => !String(value.id || '').trim())
+    if (missingId) return `El wall "${missingId.name}" necesita el Workplace ID real de CTRL.`
+    const duplicate = draft.workplaces.find((value,index) => draft.workplaces.findIndex(other => other.id === value.id) !== index)
+    if (duplicate) return `El Workplace ID ${duplicate.id} está asignado más de una vez.`
+    const invalidGeometry = draft.workplaces.find(value => !value.geometry || Number(value.geometry.width) <= 0 || Number(value.geometry.height) <= 0)
+    if (invalidGeometry) return `El wall "${invalidGeometry.name}" necesita Width y Height mayores que cero.`
+    return ''
+  }
+
+  async function saveAll() {
+    const validation = validateWalls()
+    if (validation) return props.notify('warn', validation)
+    try {
+      const result = await api.saveSetup(draft)
+      props.notify('ok', result.restartRequiredForServerBinding ? 'Configuración guardada. Reinicia la aplicación para aplicar host/puerto.' : 'Configuración guardada. Inicia sesión nuevamente.')
+      props.onSaved()
+    } catch (error: any) { props.notify('error', error.message) }
   }
 
   const sortedSources = [...detectedSources].sort((a,b) => Number(looksLikeVnc(b)) - Number(looksLikeVnc(a)))
-  return <div className="bc-screen settings-screen"><ScreenTitle title="System Configuration" subtitle="Los cambios se validan antes de reemplazar la configuración anterior." /><div className="settings-columns"><section className="settings-card bc-panel"><h3>{icon('dns')} CTRL Server</h3><label>IP Address / URL<input value={draft.barco.base_url} onChange={e => setDraft({ ...draft, barco: { ...draft.barco, base_url: e.target.value } })}/></label><div className="settings-grid-two"><label>Realm<input value={draft.barco.oidc.realm} onChange={e => setDraft({ ...draft, barco: { ...draft.barco, oidc: { ...draft.barco.oidc, realm: e.target.value } } })}/></label><label>Client ID<input value={draft.barco.oidc.client_id} onChange={e => setDraft({ ...draft, barco: { ...draft.barco, oidc: { ...draft.barco.oidc, client_id: e.target.value } } })}/></label></div><div className="settings-grid-two"><label>Temporary User<input value={ctrlUser} onChange={e => setCtrlUser(e.target.value)}/></label><label>Temporary Password<input type="password" value={ctrlPassword} onChange={e => setCtrlPassword(e.target.value)}/></label></div><button className="bc-outline-red" disabled={busy} onClick={() => void discover()}>{busy ? 'Detecting…' : 'Test / Discover Connection'}</button></section><section className="settings-card bc-panel"><h3>{icon('desktop_windows')} Workplaces / Walls</h3><div className="wall-manager"><div className="wall-list">{draft.workplaces.map((value,index) => <button key={`${value.id}-${index}`} className={selectedWall === index ? 'active' : ''} onClick={() => setSelectedWall(index)}><span>{roleOf(value) === 'primary' ? icon('star') : icon('desktop_windows')}</span><div><strong>{value.name}</strong><small>{roleOf(value) === 'primary' ? 'Principal' : 'Secundario'} · {value.id || 'ID pendiente'}</small></div></button>)}<button className="add-wall" onClick={addWall}>{icon('add')} Agregar wall secundario</button></div>{wall && <div className="wall-editor"><label>Nombre<input value={wall.name} onChange={e => patchWall({ name: e.target.value })}/></label><label>CTRL Workplace<select value={wall.id} onChange={e => { const selected = detectedWorkplaces.find(value => idOf(value) === e.target.value); patchWall({ id: e.target.value, name: selected ? labelOf(selected) : wall.name }) }}><option value="">Select…</option>{detectedWorkplaces.map(value => <option key={idOf(value)} value={idOf(value)}>{labelOf(value)}</option>)}</select></label><div className="wall-editor-actions">{roleOf(wall) !== 'primary' && <button className="bc-btn" onClick={() => { const walls: Workplace[] = draft.workplaces.map((value,index) => ({ ...value, role: index === selectedWall ? 'primary' : 'secondary' })); const chosen = walls.splice(selectedWall,1)[0]; setDraft({ ...draft, workplaces: [chosen, ...walls] }); setSelectedWall(0) }}>{icon('star')} Make Principal</button>}{draft.workplaces.length > 1 && <button className="bc-btn danger" onClick={() => { const walls = draft.workplaces.filter((_,index) => index !== selectedWall); if (!walls.some(value => roleOf(value) === 'primary')) walls[0] = { ...walls[0], role: 'primary' }; setDraft({ ...draft, workplaces: walls }); setSelectedWall(Math.max(0, selectedWall - 1)) }}>{icon('delete')} Remove Wall</button>}</div></div>}</div></section><section className="settings-card bc-panel"><h3>{icon('language')} Renderer / VNC</h3><label>CTRL VNC Source<select value={renderer.barco_source_id} onChange={e => { const source = sortedSources.find(value => idOf(value) === e.target.value); setRenderer({ barco_source_id: e.target.value, barco_source_label: labelOf(source) }) }}><option value="">Select VNC source…</option>{sortedSources.map(source => <option key={idOf(source)} value={idOf(source)}>{labelOf(source)}{looksLikeVnc(source) ? ' · VNC' : ''}</option>)}</select></label><div className="settings-grid-two"><label>VNC Host<input value={renderer.vnc_host} onChange={e => setRenderer({ vnc_host: e.target.value })}/></label><label>VNC Port<input type="number" value={renderer.vnc_port} onChange={e => setRenderer({ vnc_port: Number(e.target.value) })}/></label></div><label>Browser<select value={renderer.browser_path} onChange={e => setRenderer({ browser_path: e.target.value })}><option value="">Auto-detect</option>{browsers.map(browser => <option key={browser.path} value={browser.path}>{browser.name}</option>)}</select></label></section><section className="settings-card bc-panel"><h3>{icon('lan')} Local Service</h3><label className="bc-toggle-row"><input type="checkbox" checked={advancedBinding} onChange={e => setAdvancedBinding(e.target.checked)}/><span>Editar binding local (avanzado)</span></label><div className="settings-grid-two"><label>Bind Host<input disabled={!advancedBinding} value={draft.server.host} onChange={e => setDraft({ ...draft, server: { ...draft.server, host: e.target.value } })}/></label><label>Port<input disabled={!advancedBinding} type="number" value={draft.server.port} onChange={e => setDraft({ ...draft, server: { ...draft.server, port: Number(e.target.value) } })}/></label></div><p className="bc-help">Normalmente no debes cambiar 127.0.0.1:8080. Los cambios de binding requieren reiniciar la aplicación.</p></section></div><div className="settings-footer"><span>Save valida el runtime. Si falla, el backend restaura automáticamente la configuración anterior.</span><div><button className="bc-btn" onClick={() => setDraft(JSON.parse(JSON.stringify(props.config)))}>Discard</button><button className="bc-btn primary" onClick={async () => { try { const result = await api.saveSetup(draft); props.notify('ok', result.restartRequiredForServerBinding ? 'Configuración guardada. Reinicia la aplicación para aplicar host/puerto.' : 'Configuración guardada. Inicia sesión nuevamente.'); props.onSaved() } catch (error: any) { props.notify('error', error.message) } }}>{icon('save')} Save All Changes</button></div></div></div>
+  const detectedHasCurrent = !!wall?.id && detectedWorkplaces.some(value => idOf(value) === wall.id)
+
+  return <div className="bc-screen settings-screen"><ScreenTitle title="System Configuration" subtitle="Los cambios se validan antes de reemplazar la configuración anterior." /><div className="settings-columns"><section className="settings-card bc-panel"><h3>{icon('dns')} CTRL Server</h3><label>IP Address / URL<input value={draft.barco.base_url} onChange={e => setDraft({ ...draft, barco: { ...draft.barco, base_url: e.target.value } })}/></label><div className="settings-grid-two"><label>Realm<input value={draft.barco.oidc.realm} onChange={e => setDraft({ ...draft, barco: { ...draft.barco, oidc: { ...draft.barco.oidc, realm: e.target.value } } })}/></label><label>Client ID<input value={draft.barco.oidc.client_id} onChange={e => setDraft({ ...draft, barco: { ...draft.barco, oidc: { ...draft.barco.oidc, client_id: e.target.value } } })}/></label></div><div className="settings-grid-two"><label>Temporary User<input value={ctrlUser} onChange={e => setCtrlUser(e.target.value)}/></label><label>Temporary Password<input type="password" value={ctrlPassword} onChange={e => setCtrlPassword(e.target.value)}/></label></div><button className="bc-outline-red" disabled={busy} onClick={() => void discover()}>{busy ? 'Detecting…' : 'Test / Discover Connection'}</button></section><section className="settings-card bc-panel wall-settings-card"><h3>{icon('desktop_windows')} Workplaces / Walls</h3><p className="wall-add-help"><b>Para agregar un wall:</b> pulsa “Agregar wall secundario”, escribe un nombre, selecciona el Workplace detectado por CTRL o pega su ID manualmente, confirma la resolución y finalmente pulsa “Save All Changes”.</p><div className="wall-manager"><div className="wall-list">{draft.workplaces.map((value,index) => <button key={`${value.id}-${index}`} className={selectedWall === index ? 'active' : ''} onClick={() => { setSelectedWall(index); setWallJustAdded(false) }}><span>{roleOf(value) === 'primary' ? icon('star') : icon('desktop_windows')}</span><div><strong>{value.name}</strong><small>{roleOf(value) === 'primary' ? 'Principal' : 'Secundario'} · {value.id || 'ID pendiente'}</small></div></button>)}<button className="add-wall" onClick={addWall}>{icon('add')} Agregar wall secundario</button></div>{wall && <div className="wall-editor">{wallJustAdded && roleOf(wall) === 'secondary' && <div className="wall-new-notice"><b>Nuevo wall secundario.</b><br/>Completa los campos de este panel. No se guardará hasta que pulses “Save All Changes”.</div>}<div className="wall-editor-heading"><div><strong>{wallJustAdded ? 'Configurar nuevo wall' : 'Editar wall seleccionado'}</strong><small>{wall.id ? `Workplace ID: ${wall.id}` : 'Todavía falta asociarlo a un Workplace real de CTRL.'}</small></div><span className={`wall-role-badge ${roleOf(wall) === 'primary' ? 'primary' : ''}`}>{roleOf(wall) === 'primary' ? 'Principal' : 'Secundario'}</span></div><div className="wall-form-grid"><label>Nombre del wall <span className="wall-required">*</span><input required value={wall.name} onChange={e => patchWall({ name: e.target.value })} placeholder="Ej. Sala de crisis" /></label><label>CTRL Workplace detectado<select value={detectedHasCurrent ? wall.id : ''} onChange={e => selectDetectedWorkplace(e.target.value)}><option value="">Seleccionar del inventario…</option>{detectedWorkplaces.map(value => <option key={idOf(value)} value={idOf(value)}>{labelOf(value)} · {idOf(value)}</option>)}</select></label><label className="full">Workplace ID manual <span className="wall-required">*</span><input required value={wall.id} onChange={e => patchWall({ id: e.target.value.trim() })} placeholder="Pega aquí el ID real del Workplace de CTRL" /><span className="wall-manual-id-note">Si seleccionas un Workplace arriba, este campo se completa automáticamente. También puedes pegar el ID manualmente.</span></label></div><div><label>Resolución / área del wall</label><div className="wall-resolution-grid"><label>X<input type="number" value={wall.geometry?.x ?? 0} onChange={e => patchWallGeometry({ x: Number(e.target.value) })}/></label><label>Y<input type="number" value={wall.geometry?.y ?? 0} onChange={e => patchWallGeometry({ y: Number(e.target.value) })}/></label><label>Width <span className="wall-required">*</span><input required type="number" min="1" value={wall.geometry?.width ?? 1920} onChange={e => patchWallGeometry({ width: Number(e.target.value) })}/></label><label>Height <span className="wall-required">*</span><input required type="number" min="1" value={wall.geometry?.height ?? 1080} onChange={e => patchWallGeometry({ height: Number(e.target.value) })}/></label></div></div><p className="wall-add-help">Para un wall completo normalmente usa <b>X=0</b> y <b>Y=0</b>. Width y Height deben representar el área real que CTRL utilizará para colocar las fuentes.</p><div className="wall-editor-actions">{roleOf(wall) !== 'primary' && <button className="bc-btn" onClick={makePrimary}>{icon('star')} Make Principal</button>}{draft.workplaces.length > 1 && <button className="bc-btn danger" onClick={removeWall}>{icon('delete')} Remove Wall</button>}</div></div>}</div></section><section className="settings-card bc-panel"><h3>{icon('language')} Renderer / VNC</h3><label>CTRL VNC Source<select value={renderer.barco_source_id} onChange={e => { const source = sortedSources.find(value => idOf(source) === e.target.value); setRenderer({ barco_source_id: e.target.value, barco_source_label: labelOf(source) }) }}><option value="">Select VNC source…</option>{sortedSources.map(source => <option key={idOf(source)} value={idOf(source)}>{labelOf(source)}{looksLikeVnc(source) ? ' · VNC' : ''}</option>)}</select></label><div className="settings-grid-two"><label>VNC Host<input value={renderer.vnc_host} onChange={e => setRenderer({ vnc_host: e.target.value })}/></label><label>VNC Port<input type="number" value={renderer.vnc_port} onChange={e => setRenderer({ vnc_port: Number(e.target.value) })}/></label></div><label>Browser<select value={renderer.browser_path} onChange={e => setRenderer({ browser_path: e.target.value })}><option value="">Auto-detect</option>{browsers.map(browser => <option key={browser.path} value={browser.path}>{browser.name}</option>)}</select></label></section><section className="settings-card bc-panel"><h3>{icon('lan')} Local Service</h3><label className="bc-toggle-row"><input type="checkbox" checked={advancedBinding} onChange={e => setAdvancedBinding(e.target.checked)}/><span>Editar binding local (avanzado)</span></label><div className="settings-grid-two"><label>Bind Host<input disabled={!advancedBinding} value={draft.server.host} onChange={e => setDraft({ ...draft, server: { ...draft.server, host: e.target.value } })}/></label><label>Port<input disabled={!advancedBinding} type="number" value={draft.server.port} onChange={e => setDraft({ ...draft, server: { ...draft.server, port: Number(e.target.value) } })}/></label></div><p className="bc-help">Normalmente no debes cambiar 127.0.0.1:8080. Los cambios de binding requieren reiniciar la aplicación.</p></section></div><div className="settings-footer"><span>Save valida el runtime. Si falla, el backend restaura automáticamente la configuración anterior.</span><div><button className="bc-btn" onClick={() => { setDraft(JSON.parse(JSON.stringify(props.config))); setSelectedWall(0); setWallJustAdded(false) }}>Discard</button><button className="bc-btn primary" onClick={() => void saveAll()}>{icon('save')} Save All Changes</button></div></div></div>
 }
 
 function SetupWizard({ onConfigured, notify }: { onConfigured: () => void; notify: (kind: Toast['kind'], message: string) => void }) {
