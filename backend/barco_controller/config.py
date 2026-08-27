@@ -13,6 +13,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "server": {
         "host": "127.0.0.1",
         "port": 8080,
+        "lan_access": True,
         "cors_origins": [],
         "trust_proxy": False,
     },
@@ -87,6 +88,7 @@ def normalize_config(value: dict[str, Any] | None) -> dict[str, Any]:
     server = cfg.setdefault("server", {})
     server["host"] = str(server.get("host") or "127.0.0.1").strip()
     server["port"] = max(1, min(65535, int(server.get("port") or 8080)))
+    server["lan_access"] = bool(server.get("lan_access", True))
 
     barco = cfg.setdefault("barco", {})
     barco["base_url"] = str(barco.get("base_url") or "").strip().rstrip("/")
@@ -115,8 +117,6 @@ def normalize_config(value: dict[str, Any] | None) -> dict[str, Any]:
         elif raw_role == "secondary":
             role = "secondary"
         elif not primary_assigned:
-            # Backward compatibility: older configs had no role field. The first
-            # configured workplace remains the principal wall automatically.
             role = "primary"
         else:
             role = "secondary"
