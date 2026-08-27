@@ -30,6 +30,18 @@ class ExternalRendererService:
         self._active: dict[str, dict[str, Any]] = {}
 
     @staticmethod
+    def _hidden_process_kwargs(*, new_process_group: bool = False) -> dict[str, Any]:
+        if os.name != "nt":
+            return {}
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = subprocess.SW_HIDE
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        if new_process_group:
+            flags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        return {"startupinfo": startupinfo, "creationflags": flags}
+
+    @staticmethod
     def detect_browsers() -> list[dict[str, str]]:
         candidates: list[tuple[str, str]] = []
         if os.name == "nt":
@@ -206,13 +218,20 @@ class ExternalRendererService:
             return False
         return False
 
-    @staticmethod
-    def _terminate_process(process: subprocess.Popen[Any]) -> None:
+    @classmethod
+    def _terminate_process(cls, process: subprocess.Popen[Any]) -> None:
         if process.poll() is not None:
             return
         try:
             if os.name == "nt":
-                subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5, check=False)
+                subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                    check=False,
+                    **cls._hidden_process_kwargs(),
+                )
             else:
                 process.terminate()
                 process.wait(timeout=3)
@@ -245,7 +264,7 @@ class ExternalRendererService:
                 self._args(browser, renderer, target_url),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+                **self._hidden_process_kwargs(new_process_group=True),
             )
             self._processes[renderer_id] = process
             self._active[renderer_id] = {
