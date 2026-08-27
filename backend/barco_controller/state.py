@@ -12,7 +12,7 @@ from .services.oidc import OIDCSession
 from .services.route_engine import RouteEngine
 from .services.workplace import WorkplaceController
 from .storage.json_store import JsonStore
-from .storage.repositories import CameraRuleRepository, ExternalSourceRepository, RouteRepository
+from .storage.repositories import CameraRuleRepository, ExternalSourceRepository, LayoutRepository, RouteRepository
 
 
 @dataclass
@@ -25,6 +25,7 @@ class AppState:
     route_repo: RouteRepository
     camera_repo: CameraRuleRepository
     external_repo: ExternalSourceRepository
+    layout_repo: LayoutRepository
     external: ExternalRendererService
     routes: RouteEngine
     cameras: CameraEngine
@@ -53,10 +54,11 @@ def create_state() -> AppState:
     route_repo = RouteRepository(JsonStore(DATA_DIR / "routes.json"))
     camera_repo = CameraRuleRepository(JsonStore(DATA_DIR / "camera_rules.json"))
     external_repo = ExternalSourceRepository(JsonStore(DATA_DIR / "external_sources.json"))
+    layout_repo = LayoutRepository(JsonStore(DATA_DIR / "layouts.json"))
     external = ExternalRendererService(external_repo, cfg)
     routes = RouteEngine(route_repo, workplace, external, cfg)
     cameras = CameraEngine(camera_repo, workplace, routes, cfg)
-    return AppState(cfg, endpoints, oidc, ctrl, workplace, route_repo, camera_repo, external_repo, external, routes, cameras)
+    return AppState(cfg, endpoints, oidc, ctrl, workplace, route_repo, camera_repo, external_repo, layout_repo, external, routes, cameras)
 
 
 class StateManager:
