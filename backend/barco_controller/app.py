@@ -7,6 +7,7 @@ from .api.cameras import create_cameras_blueprint
 from .api.control import create_control_blueprint
 from .api.diagnostics import create_diagnostics_blueprint
 from .api.external import create_external_blueprint
+from .api.layouts import create_layouts_blueprint
 from .api.routes import create_routes_blueprint
 from .api.setup import create_setup_blueprint
 from .config import getenv, safe_public_config
@@ -30,6 +31,7 @@ def create_app() -> Flask:
     app.register_blueprint(create_routes_blueprint(state), url_prefix="/api")
     app.register_blueprint(create_cameras_blueprint(state), url_prefix="/api")
     app.register_blueprint(create_external_blueprint(state), url_prefix="/api")
+    app.register_blueprint(create_layouts_blueprint(state), url_prefix="/api")
     app.register_blueprint(create_diagnostics_blueprint(state), url_prefix="/api")
 
     @app.get("/api/config")
