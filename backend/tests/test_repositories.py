@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from barco_controller.storage.json_store import JsonStore
-from barco_controller.storage.repositories import CameraRuleRepository, RouteRepository
+from barco_controller.storage.repositories import CameraRuleRepository, LayoutRepository, RouteRepository
 
 
 class RepositoryTests(unittest.TestCase):
@@ -31,6 +31,24 @@ class RepositoryTests(unittest.TestCase):
             repo = RouteRepository(JsonStore(Path(tmp) / "routes.json"))
             route = repo.save({"name": "R", "workplaceId": "wp", "items": [{"compositionId": "abc", "label": "Comp"}]})
             self.assertEqual(route["items"][0], {"kind": "composition", "id": "abc", "label": "Comp"})
+
+    def test_layout_items_keep_geometry_and_external_kind(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = LayoutRepository(JsonStore(Path(tmp) / "layouts.json"))
+            layout = repo.save({
+                "name": "Mixto",
+                "workplaceId": "wp",
+                "items": [{
+                    "kind": "external",
+                    "id": "web-1",
+                    "label": "Dashboard",
+                    "geometry": {"x": 100, "y": 50, "width": 900, "height": 500},
+                }],
+            })
+            item = layout["items"][0]
+            self.assertEqual(item["kind"], "external")
+            self.assertEqual(item["id"], "web-1")
+            self.assertEqual(item["geometry"], {"type": "px", "x": 100, "y": 50, "width": 900, "height": 500})
 
 
 if __name__ == "__main__":
